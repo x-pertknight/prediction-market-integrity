@@ -232,7 +232,10 @@ def run() -> None:
     weather_mat = weather.dropna(subset=["tmax_lag1","bracket_dist_lag1"])
     avail_wx   = [c for c in WEATHER_FEATURES_V2 if c in weather_mat.columns]
     out_wx     = PROC_DIR / "feature_matrix_weather_v2.parquet"
-    weather_mat[["city","close_date","outcome"] + avail_wx].to_parquet(out_wx, index=False)
+    # Include series_ticker so model_ensemble can group correctly
+    wx_id_cols = ["series_ticker", "city", "close_date", "outcome"]
+    wx_id_cols = [c for c in wx_id_cols if c in weather_mat.columns]
+    weather_mat[wx_id_cols + avail_wx].to_parquet(out_wx, index=False)
     print(f"[FeatV2] Weather v2: {len(weather_mat):,} rows × {len(avail_wx)} features → {out_wx}")
 
     # Feature count summary

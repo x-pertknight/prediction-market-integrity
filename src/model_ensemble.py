@@ -160,6 +160,10 @@ def build_ensemble(wf_dict: dict[str, pd.DataFrame]) -> pd.DataFrame:
     frames = []
     for label, wf in wf_dict.items():
         if not wf.empty:
+            wf = wf.copy()
+            # Ensure series_ticker exists (weather matrix may use city instead)
+            if "series_ticker" not in wf.columns and "city" in wf.columns:
+                wf["series_ticker"] = wf["city"]
             keep = ["close_date","series_ticker","outcome","pred_prob","fold","model_label"]
             # Carry market_price so backtest can compute entry signals
             for col in ["market_price", "price_lag1", "category", "city"]:
