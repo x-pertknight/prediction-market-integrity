@@ -7,7 +7,7 @@ python-telegram-bot 22.7 (sync send via requests for simplicity).
 import os
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
@@ -37,7 +37,7 @@ def _log(event_type: str, data: dict) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / "telegram_log.jsonl"
     with open(log_path, "a") as f:
-        f.write(json.dumps({"ts": datetime.utcnow().isoformat(), "type": event_type, **data}) + "\n")
+        f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "type": event_type, **data}) + "\n")
 
 
 def alert_entry_signal(

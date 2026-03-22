@@ -13,7 +13,7 @@ import json
 import uuid
 import random
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +38,7 @@ class Order:
     status:       str    = "pending"   # pending | filled | cancelled
     filled_price: float  = 0.0
     fee:          float  = 0.0
-    timestamp:    str    = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp:    str    = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -54,7 +54,7 @@ class Position:
     entry_price:  float
     category:     str
     model_prob:   float
-    open_time:    str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    open_time:    str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     exit_price:   float = 0.0
     pnl:          float = 0.0
     status:       str   = "open"   # open | closed
@@ -89,7 +89,7 @@ class PaperBroker:
 
     def _log_trade(self, event: dict):
         with open(self._log_path, "a") as f:
-            f.write(json.dumps({"ts": datetime.utcnow().isoformat(), **event}) + "\n")
+            f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(), **event}) + "\n")
 
     def _simulate_fill_price(self, limit_price: float, side: str) -> float:
         """Apply slippage: buy fills slightly above limit, sell slightly below."""
