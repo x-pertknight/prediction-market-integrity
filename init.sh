@@ -21,13 +21,26 @@ export TELEGRAM_CHAT_ID=""
 echo "[env] Environment variables set."
 
 # ── 2. PYTHON VERSION CHECK ───────────────────────────────────────────────────
-REQUIRED_PYTHON="3.14"
 PYTHON_BIN="python3"
-
 PYTHON_VERSION=$($PYTHON_BIN --version 2>&1 | awk '{print $2}')
 echo "[python] Found: $PYTHON_VERSION"
 
-# ── 3. DIRECTORY STRUCTURE ───────────────────────────────────────────────────
+# ── 3. VIRTUALENV ─────────────────────────────────────────────────────────────
+VENV_DIR="$(pwd)/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+  echo "[venv] Creating virtualenv at .venv ..."
+  $PYTHON_BIN -m venv "$VENV_DIR"
+else
+  echo "[venv] .venv already exists, skipping creation."
+fi
+
+# Use venv binaries for all subsequent commands
+PIP="$VENV_DIR/bin/pip"
+PYTHON="$VENV_DIR/bin/python"
+
+echo "[venv] Activated: $VENV_DIR"
+
+# ── 4. DIRECTORY STRUCTURE ───────────────────────────────────────────────────
 echo "[dirs] Creating project directories..."
 mkdir -p data/raw data/processed models reports docs
 
@@ -38,26 +51,26 @@ echo "  models/            — trained RF models (.joblib)"
 echo "  reports/           — backtest reports (.md, .csv)"
 echo "  docs/              — audit, notes"
 
-# ── 4. INSTALL DEPENDENCIES ──────────────────────────────────────────────────
-echo "[deps] Installing Python dependencies..."
+# ── 5. INSTALL DEPENDENCIES ──────────────────────────────────────────────────
+echo "[deps] Installing Python dependencies into .venv ..."
 
-$PYTHON_BIN -m pip install --quiet --upgrade pip
+$PIP install --quiet --upgrade pip
 
-$PYTHON_BIN -m pip install --quiet \
+$PIP install --quiet \
   "scikit-learn==1.8.0" \
   "pandas==3.0.0" \
   "numpy==2.4.1" \
   "requests==2.32.5" \
   "joblib==1.5.3" \
   "python-telegram-bot==22.7" \
-  "pyarrow>=16.0"     # for parquet support in pandas
+  "pyarrow>=16.0"
 
 echo "[deps] All dependencies installed."
 
-# ── 5. SMOKE TEST ─────────────────────────────────────────────────────────────
+# ── 6. SMOKE TEST ─────────────────────────────────────────────────────────────
 echo "[smoke] Running smoke tests..."
 
-$PYTHON_BIN - <<'PYEOF'
+$PYTHON - <<'PYEOF'
 import sys
 
 # Core imports
