@@ -208,9 +208,13 @@ def run() -> None:
         df_all = pd.read_parquet(all_path)
         avail_all = [c for c in GENERIC_FEATURES_V2 if c in df_all.columns]
 
-        # Crypto subset
+        # Crypto subset (cap to MAX_CRYPTO_ROWS to limit training time)
+        MAX_CRYPTO_ROWS = 500_000
         if "category" in df_all.columns:
             df_crypto = df_all[df_all["category"].isin(CRYPTO_CATEGORIES)].copy()
+            if len(df_crypto) > MAX_CRYPTO_ROWS:
+                df_crypto = df_crypto.sample(MAX_CRYPTO_ROWS, random_state=42)
+                print(f"[Crypto] Sampled {MAX_CRYPTO_ROWS:,} rows from {len(df_crypto):,}")
             if len(df_crypto) > 100:
                 wf_crypto = walk_forward(df_crypto, avail_all, "crypto_v1")
                 if not wf_crypto.empty:
@@ -218,12 +222,20 @@ def run() -> None:
                     wf_dict["crypto"] = wf_crypto
                     train_final_and_shap(df_crypto, avail_all, "crypto_v1")
 
-        # General model (all)
-        wf_general = walk_forward(df_all, avail_all, "general_v1")
-        if not wf_general.empty:
-            wf_general.to_parquet(PROC_DIR / "wf_general_v1.parquet", index=False)
-            wf_dict["general"] = wf_general
-            train_final_and_shap(df_all, avail_all, "general_v1")
+        # General model: exclude Crypto (has its own model), cap at MAX_GENERAL_ROWS
+        # to keep training time manageable when crypto data is huge
+        MAX_GENERAL_ROWS = 300_000
+        NON_CRYPTO = set(df_all["category"].unique()) - CRYPTO_CATEGORIES if "category" in df_all.columns else set()
+        df_general = df_all[df_all["category"].isin(NON_CRYPTO)].copy() if NON_CRYPTO else df_all.copy()
+        if len(df_general) > MAX_GENERAL_ROWS:
+            df_general = df_general.sample(MAX_GENERAL_ROWS, random_state=42)
+            print(f"[General] Sampled {MAX_GENERAL_ROWS:,} rows from {len(df_general):,}")
+        if len(df_general) > 100:
+            wf_general = walk_forward(df_general, avail_all, "general_v1")
+            if not wf_general.empty:
+                wf_general.to_parquet(PROC_DIR / "wf_general_v1.parquet", index=False)
+                wf_dict["general"] = wf_general
+                train_final_and_shap(df_general, avail_all, "general_v1")
 
     # 3. Ensemble
     if len(wf_dict) > 1:
