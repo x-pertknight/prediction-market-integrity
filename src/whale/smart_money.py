@@ -16,7 +16,15 @@ def load_whale_history() -> pd.DataFrame:
     files = sorted(WHALE_DIR.glob("whale_positions_*.csv"))
     if not files:
         return pd.DataFrame()
-    frames = [pd.read_csv(f) for f in files]
+    frames = []
+    for f in files:
+        if f.stat().st_size > 10:   # skip empty/stub files
+            try:
+                frames.append(pd.read_csv(f))
+            except Exception:
+                pass
+    if not frames:
+        return pd.DataFrame()
     return pd.concat(frames, ignore_index=True).drop_duplicates()
 
 
