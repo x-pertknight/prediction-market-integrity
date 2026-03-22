@@ -1,0 +1,29 @@
+{
+  "features": [
+    "tmax_roll3",
+    "tmax_roll7",
+    "tmax_roll14",
+    "tmax_std3",
+    "tmax_std7",
+    "tmax_std14",
+    "tmax_lag1",
+    "tmax_zscore14",
+    "tmax_trend3",
+    "doy_sin",
+    "doy_cos",
+    "month",
+    "day_of_week",
+    "bracket_strike",
+    "bracket_dist_lag1",
+    "bracket_dist_roll7",
+    "bracket_dist_roll14",
+    "bracket_pct_roll7",
+    "city_enc",
+    "hist_win_rate",
+    "volume_rank",
+    "market_price",
+    "days_to_expiry"
+  ],
+  "target": "outcome",
+  "n_features": 23
+}
