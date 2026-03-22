@@ -152,10 +152,21 @@ def run() -> None:
         save_prefix = "weather_v2",
     )
 
-    # Generic model (all markets)
+    # Generic model (all markets, capped for training speed)
+    MAX_ROWS = 500_000
+    df_all   = pd.read_parquet(PROC_DIR / "feature_matrix_all.parquet")
+    if len(df_all) > MAX_ROWS:
+        df_all = df_all.sample(MAX_ROWS, random_state=42)
+        tmp_path = PROC_DIR / "feature_matrix_all_capped.parquet"
+        df_all.to_parquet(tmp_path, index=False)
+        feat_path_gen = "feature_matrix_all_capped.parquet"
+        print(f"[ModelDual] Generic model: sampled {MAX_ROWS:,} rows")
+    else:
+        feat_path_gen = "feature_matrix_all.parquet"
+
     wf_generic = run_model(
         name        = "Generic (all markets)",
-        feat_path   = "feature_matrix_all.parquet",
+        feat_path   = feat_path_gen,
         features    = GENERIC_FEATURES,
         save_prefix = "generic_v1",
     )
