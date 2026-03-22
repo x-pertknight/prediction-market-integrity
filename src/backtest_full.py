@@ -266,9 +266,12 @@ def run() -> None:
         group_col = "category",
     )
 
-    # General model
+    # General model (model_dual saves wf_generic_v1, model_ensemble saves wf_general_v1)
+    gen_path = "wf_general_v1.parquet"
+    if not (PROC_DIR / gen_path).exists():
+        gen_path = "wf_generic_v1.parquet"   # fallback from model_dual
     results["General v1"] = backtest_model(
-        wf_path  = "wf_general_v1.parquet",
+        wf_path  = gen_path,
         label    = "General v1",
         group_col = "category",
     )
