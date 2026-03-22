@@ -160,8 +160,12 @@ def build_ensemble(wf_dict: dict[str, pd.DataFrame]) -> pd.DataFrame:
     frames = []
     for label, wf in wf_dict.items():
         if not wf.empty:
-            frames.append(wf[["close_date","series_ticker","outcome","pred_prob","fold","model_label"]
-                               + (["category"] if "category" in wf.columns else [])])
+            keep = ["close_date","series_ticker","outcome","pred_prob","fold","model_label"]
+            # Carry market_price so backtest can compute entry signals
+            for col in ["market_price", "price_lag1", "category", "city"]:
+                if col in wf.columns:
+                    keep.append(col)
+            frames.append(wf[keep])
     if not frames:
         return pd.DataFrame()
 
