@@ -72,6 +72,72 @@ def load_btc_price() -> dict:
     return {"price": 0, "change_pct": 0}
 
 
+def load_trades_summary() -> dict:
+    """Load rolling Sharpe, fragility, and P&L from clean trades parquet."""
+    import numpy as np
+    import pandas as pd
+    path = PROC_DIR / "trades_clean.parquet"
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_parquet(path)
+        pnl = df["pnl"]
+        total_pnl  = float(pnl.sum())
+        win_rate   = float(df["win"].mean()) if "win" in df.columns else 0.0
+        n_trades   = len(df)
+
+        # Rolling Sharpe (last 90 trades)
+        pnl90  = pnl.tail(90)
+        sharpe = float(pnl90.mean() / pnl90.std() * np.sqrt(252)) if pnl90.std() > 0 else 0.0
+
+        # Fragility proxy: negative skew = fragile
+        skew      = float(pnl.skew())
+        fragility = -skew   # positive fragility = left tail exposure
+
+        # Max drawdown
+        cum = pnl.cumsum()
+        mdd = float((cum - cum.cummax()).min())
+
+        return {
+            "n_trades":   n_trades,
+            "total_pnl":  total_pnl,
+            "win_rate":   win_rate,
+            "sharpe90":   sharpe,
+            "fragility":  fragility,
+            "skew":       skew,
+            "max_dd":     mdd,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def make_pnl_panel(summary: dict) -> Panel:
+    if not summary or "n_trades" not in summary:
+        return Panel("[dim]No trade data (run backtest_clean.py)[/dim]",
+                     title="📊 P&L + Sharpe", border_style="dim")
+
+    total_pnl  = summary["total_pnl"]
+    win_rate   = summary["win_rate"]
+    n_trades   = summary["n_trades"]
+    sharpe     = summary["sharpe90"]
+    fragility  = summary.get("fragility", 0)
+    mdd        = summary.get("max_dd", 0)
+
+    pnl_col    = "green" if total_pnl > 0 else "red"
+    sharpe_col = "green" if sharpe > 1 else "yellow" if sharpe > 0 else "red"
+    frag_col   = "green" if fragility < 0 else "yellow" if fragility < 1 else "red"
+
+    text = (
+        f"[bold]Trades:[/bold] {n_trades:,}  "
+        f"[bold]Win:[/bold] {win_rate:.1%}\n"
+        f"[bold]P&L:[/bold] [{pnl_col}]{total_pnl:+.4f}[/{pnl_col}]  "
+        f"[bold]Max DD:[/bold] {mdd:+.4f}\n"
+        f"[bold]Sharpe (90):[/bold] [{sharpe_col}]{sharpe:+.2f}[/{sharpe_col}]  "
+        f"[bold]Fragility:[/bold] [{frag_col}]{fragility:+.2f}[/{frag_col}]"
+    )
+    return Panel(text, title="📊 P&L + Sharpe (90-trade rolling)", border_style="green")
+
+
 def make_risk_panel(state: dict) -> Panel:
     bankroll   = state.get("bankroll",    1000.0)
     daily_pnl  = state.get("daily_pnl",  0.0)
@@ -134,18 +200,29 @@ def make_market_panel(fg: dict, btc: dict) -> Panel:
 
 
 def render_once(console: Console) -> None:
-    state  = load_risk_state()
-    alerts = load_whale_alerts()
-    fg     = load_fear_greed()
-    btc    = load_btc_price()
+    state    = load_risk_state()
+    alerts   = load_whale_alerts()
+    fg       = load_fear_greed()
+    btc      = load_btc_price()
+    summary  = load_trades_summary()
+    whale_raw = load_json(WHALE_DIR / "whale_latest.json")
+
+    # Regime from latest whale scan
+    regime     = whale_raw.get("regime", "")
+    kelly_mult = whale_raw.get("kelly_multiplier", 1.0)
 
     console.clear()
     console.print(Panel(
         f"[bold cyan]TrapTrade[/bold cyan]  |  "
-        f"Backtest Mode  |  {date.today().isoformat()}",
+        f"Backtest Mode  |  {date.today().isoformat()}"
+        + (f"  |  Regime: [bold]{regime}[/bold]  Kelly: {kelly_mult:.2f}x" if regime else ""),
         border_style="cyan"
     ))
-    console.print(Columns([make_risk_panel(state), make_market_panel(fg, btc)]))
+    console.print(Columns([
+        make_pnl_panel(summary),
+        make_risk_panel(state),
+        make_market_panel(fg, btc),
+    ]))
     console.print(make_whale_table(alerts))
     console.print("\n[dim]Press Ctrl+C to exit[/dim]")
 

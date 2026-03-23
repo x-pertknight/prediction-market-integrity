@@ -66,6 +66,19 @@ CLEAN_FEATURES = [
     "btc_ret_7d",
     "btc_vol_20d",
     "btc_zscore_30",
+    # FRED macro (Point 4 — daily, observable at open)
+    "dxy_proxy",
+    "fed_funds_rate",
+    "yield_10y",
+    # Coinalyze: BTC derivatives (Point 4)
+    "btc_funding_rate",
+    "btc_open_interest",
+    # NewsAPI headline counts (Point 4)
+    "news_count_crypto",
+    "news_count_weather",
+    "news_count_macro",
+    "news_count_politics",
+    "news_count_sports",
     # Whale / sentiment (approximate — no strict lookahead since static)
     "smart_money_index",
     "whale_cluster_detected",

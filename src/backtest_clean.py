@@ -42,13 +42,129 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 EDGE_MULT = 0.5   # enter when market_price <= pred_prob * 0.5 (2× edge)
 
+# ── Point 5: Fee models ───────────────────────────────────────────────────────
+# PnL is in [0, 1] space (entry_price and exit_price are fractions).
+# Kalshi: $0.07 per contract per side → 0.07 total round-trip per $1 nominal.
+# Polymarket: 2% of each transaction value.
+FEE_MODELS: dict[str, dict] = {
+    "none":       {"taker": 0.00, "type": "flat"},
+    "kalshi":     {"taker": 0.07, "type": "flat"},   # $0.07/contract round-trip
+    "polymarket": {"taker": 0.02, "type": "pct"},    # 2% per leg
+}
+
 # Long-duration categories where price_lag1 is a weaker proxy
 LONG_DURATION_CATS = {"Politics", "Elections", "Companies", "Science and Technology",
                       "Health", "Education", "Social", "World", "Exotics"}
 
 
+def apply_fees(pnl: pd.Series, entry: pd.Series, exit_: pd.Series,
+               fee_model: str = "none") -> pd.Series:
+    """Subtract round-trip fees from PnL series."""
+    fm = FEE_MODELS.get(fee_model, FEE_MODELS["none"])
+    if fm["type"] == "flat":
+        return pnl - fm["taker"]  # flat cost per contract (Kalshi: $0.07)
+    else:  # pct
+        return pnl - entry * fm["taker"] - exit_ * fm["taker"]
+
+
+# ── Point 6: Bootstrap CI ─────────────────────────────────────────────────────
+
+def bootstrap_sharpe_ci(returns: pd.Series, n: int = 1000, ci: float = 0.95) -> dict:
+    """Bootstrap confidence interval on annualised Sharpe (√252 scaling)."""
+    r = np.array(returns.dropna())
+    if len(r) < 10 or r.std() == 0:
+        s = r.mean() / r.std() * np.sqrt(252) if r.std() > 0 else 0.0
+        return {"sharpe": s, "ci_lower": s, "ci_upper": s, "n_bootstrap": 0}
+
+    rng     = np.random.default_rng(42)
+    sharpes = []
+    for _ in range(n):
+        sample = rng.choice(r, size=len(r), replace=True)
+        if sample.std() > 0:
+            sharpes.append(sample.mean() / sample.std() * np.sqrt(252))
+
+    sharpes = np.array(sharpes)
+    alpha   = (1 - ci) / 2
+    return {
+        "sharpe":      float(np.median(sharpes)),
+        "ci_lower":    float(np.percentile(sharpes, alpha * 100)),
+        "ci_upper":    float(np.percentile(sharpes, (1 - alpha) * 100)),
+        "n_bootstrap": n,
+    }
+
+
+# ── Point 7: Robustness tests ─────────────────────────────────────────────────
+
+def run_robustness_tests(trades: pd.DataFrame, wf: pd.DataFrame | None = None,
+                         prob_col: str = "pred_prob_clean") -> dict:
+    """
+    4 robustness checks:
+      1. First vs second half of time series
+      2. Exclude best-Sharpe category
+      3. Threshold perturbation ±20%
+      4. 50% random data removal
+    Returns dict of {test_name: metrics_dict}.
+    """
+    if trades.empty:
+        return {}
+
+    results: dict[str, dict] = {}
+
+    # 1. First/second half split
+    mid = len(trades) // 2
+    first  = trades.iloc[:mid].copy()
+    second = trades.iloc[mid:].copy()
+    for half, label in [(first, "first_half"), (second, "second_half")]:
+        half["cumulative_pnl"] = half["pnl"].cumsum()
+        results[label] = metrics(half, label)
+
+    # 2. Exclude best category
+    if "category" in trades.columns:
+        cat_sharpes = {}
+        for cat, grp in trades.groupby("category"):
+            if len(grp) >= 5:
+                pnl = grp["pnl"]
+                if pnl.std() > 0:
+                    cat_sharpes[cat] = pnl.mean() / pnl.std() * np.sqrt(252)
+        if cat_sharpes:
+            best_cat = max(cat_sharpes, key=cat_sharpes.__getitem__)
+            wo_best  = trades[trades["category"] != best_cat].copy()
+            wo_best["cumulative_pnl"] = wo_best["pnl"].cumsum()
+            results[f"excl_best_cat({best_cat[:15]})"] = metrics(wo_best, f"excl_{best_cat}")
+
+    # 3. Threshold perturbation ±20% — re-run signal on wf if available
+    if wf is not None and prob_col in wf.columns and "price_lag1" in wf.columns:
+        for delta_pct, tag in [(-0.2, "threshold_minus20"), (0.2, "threshold_plus20")]:
+            mult = EDGE_MULT * (1 + delta_pct)
+            df_t = wf.copy()
+            df_t["_date"] = pd.to_datetime(df_t["close_date"])
+            sig  = (df_t["price_lag1"] > 0) & \
+                   (df_t["price_lag1"] <= df_t[prob_col] * mult)
+            t_df = df_t[sig].copy()
+            if not t_df.empty:
+                t_df["entry_price"] = t_df["price_lag1"]
+                t_df["exit_price"]  = t_df["outcome"].astype(float)
+                t_df["pnl"]         = t_df["exit_price"] - t_df["entry_price"]
+                t_df["roi"]         = t_df["pnl"] / t_df["entry_price"].clip(lower=1e-6)
+                t_df["win"]         = (t_df["pnl"] > 0).astype(int)
+                t_df["mae"]         = np.where(t_df["outcome"] == 0, t_df["entry_price"], 0)
+                t_df["mfe"]         = np.where(t_df["outcome"] == 1, 1 - t_df["entry_price"], 0)
+                t_df = t_df.sort_values("_date").reset_index(drop=True)
+                t_df["cumulative_pnl"] = t_df["pnl"].cumsum()
+                results[tag] = metrics(t_df, tag)
+
+    # 4. 50% random removal
+    rng  = np.random.default_rng(42)
+    idx  = rng.choice(len(trades), size=len(trades) // 2, replace=False)
+    half = trades.iloc[sorted(idx)].copy()
+    half["cumulative_pnl"] = half["pnl"].cumsum()
+    results["random_50pct"] = metrics(half, "random_50pct")
+
+    return results
+
+
 def run_backtest_clean(wf: pd.DataFrame, prob_col: str = "pred_prob_clean",
-                       label: str = "clean") -> pd.DataFrame:
+                       label: str = "clean", fee_model: str = "none") -> pd.DataFrame:
     """
     Clean backtest: entry at price_lag1, signal on pred_prob_clean.
     Returns trades DataFrame.
@@ -83,7 +199,12 @@ def run_backtest_clean(wf: pd.DataFrame, prob_col: str = "pred_prob_clean",
 
     trades["entry_price"]    = trades["price_lag1"]
     trades["exit_price"]     = trades["outcome"].astype(float)
-    trades["pnl"]            = trades["exit_price"] - trades["entry_price"]
+    trades["pnl_raw"]        = trades["exit_price"] - trades["entry_price"]
+    trades["pnl"]            = apply_fees(
+                                   trades["pnl_raw"], trades["entry_price"],
+                                   trades["exit_price"], fee_model
+                               )
+    trades["fee_model"]      = fee_model
     trades["roi"]            = trades["pnl"] / trades["entry_price"].clip(lower=1e-6)
     trades["win"]            = (trades["pnl"] > 0).astype(int)
     trades["mae"]            = np.where(trades["outcome"] == 0, trades["entry_price"], 0)
@@ -96,30 +217,39 @@ def run_backtest_clean(wf: pd.DataFrame, prob_col: str = "pred_prob_clean",
     return trades
 
 
-def metrics(trades: pd.DataFrame, label: str = "") -> dict:
+def metrics(trades: pd.DataFrame, label: str = "", bootstrap: bool = False) -> dict:
     if trades.empty:
         return {"n_trades": 0, "label": label}
     pnl = trades["pnl"]
     roi = trades["roi"]
     cum = trades["cumulative_pnl"] if "cumulative_pnl" in trades.columns \
           else trades.sort_values("_date")["pnl"].cumsum()
-    mdd = (cum - cum.cummax()).min()
+    mdd    = (cum - cum.cummax()).min()
     t_stat = pnl.mean() / pnl.std() * np.sqrt(len(pnl)) if pnl.std() > 0 else 0
+    sharpe = round(pnl.mean() / pnl.std() * np.sqrt(252), 4) if pnl.std() > 0 else 0
 
-    return {
-        "label":      label,
-        "n_trades":   len(trades),
-        "win_rate":   round(trades["win"].mean(), 4),
-        "total_pnl":  round(pnl.sum(), 4),
-        "mean_pnl":   round(pnl.mean(), 4),
-        "sharpe":     round(pnl.mean() / pnl.std() * np.sqrt(252), 4) if pnl.std() > 0 else 0,
-        "sharpe_roi": round(roi.mean() / roi.std() * np.sqrt(252), 4) if roi.std() > 0 else 0,
-        "t_stat":     round(t_stat, 2),
+    out = {
+        "label":        label,
+        "n_trades":     len(trades),
+        "win_rate":     round(trades["win"].mean(), 4),
+        "total_pnl":    round(pnl.sum(), 4),
+        "mean_pnl":     round(pnl.mean(), 4),
+        "sharpe":       sharpe,
+        "sharpe_roi":   round(roi.mean() / roi.std() * np.sqrt(252), 4) if roi.std() > 0 else 0,
+        "t_stat":       round(t_stat, 2),
         "max_drawdown": round(mdd, 4),
-        "avg_entry":  round(trades["entry_price"].mean(), 4),
-        "mean_mae":   round(trades["mae"].mean(), 4),
-        "mean_mfe":   round(trades["mfe"].mean(), 4),
+        "avg_entry":    round(trades["entry_price"].mean(), 4),
+        "mean_mae":     round(trades["mae"].mean(), 4),
+        "mean_mfe":     round(trades["mfe"].mean(), 4),
     }
+
+    # Point 6: Bootstrap CI (only on primary metrics to avoid slowdown)
+    if bootstrap and len(pnl) >= 30:
+        ci = bootstrap_sharpe_ci(pnl)
+        out["sharpe_ci_lower"] = round(ci["ci_lower"], 4)
+        out["sharpe_ci_upper"] = round(ci["ci_upper"], 4)
+
+    return out
 
 
 def comparison_metrics(wf: pd.DataFrame, prob_col: str) -> dict:
@@ -177,7 +307,8 @@ def md_table(headers: list[str], rows: list[list]) -> str:
     return "\n".join([header_line, sep_line, body])
 
 
-def generate_report(results: dict, trades_dict: dict) -> None:
+def generate_report(results: dict, trades_dict: dict,
+                    robustness_dict: dict | None = None) -> None:
     today = date.today().isoformat()
     out   = REPORTS_DIR / f"backtest_clean_{today}.md"
 
@@ -288,6 +419,50 @@ def generate_report(results: dict, trades_dict: dict) -> None:
                         "",
                     ]
 
+    # ── Bootstrap CI section ──────────────────────────────────────────────────
+    lines += [
+        "---",
+        "## Sharpe Bootstrap CI (1000 resamples, 95%)",
+        "",
+    ]
+    ci_rows = []
+    for model_label, (cmp, _) in results.items():
+        clean_m = cmp.get("clean", {})
+        if clean_m.get("n_trades", 0) == 0:
+            continue
+        ci_lower = clean_m.get("sharpe_ci_lower", "—")
+        ci_upper = clean_m.get("sharpe_ci_upper", "—")
+        sharpe   = clean_m.get("sharpe", 0)
+        ci_rows.append([
+            model_label,
+            f"{sharpe:+.2f}",
+            f"{ci_lower:+.2f}" if isinstance(ci_lower, float) else ci_lower,
+            f"{ci_upper:+.2f}" if isinstance(ci_upper, float) else ci_upper,
+        ])
+    if ci_rows:
+        lines += [
+            md_table(["Model", "Sharpe", "CI 95% lower", "CI 95% upper"], ci_rows),
+            "",
+        ]
+
+    # ── Robustness tests section ──────────────────────────────────────────────
+    if robustness_dict:
+        lines += [
+            "---",
+            "## Robustness Tests",
+            "",
+            "| Test | Trades | Win Rate | Sharpe | P&L |",
+            "|---|---|---|---|---|",
+        ]
+        for test_name, m in robustness_dict.items():
+            if m.get("n_trades", 0) == 0:
+                continue
+            lines.append(
+                f"| {test_name} | {m['n_trades']} | {m['win_rate']:.1%} | "
+                f"{m['sharpe']:+.2f} | {m['total_pnl']:+.2f} |"
+            )
+        lines.append("")
+
     lines += [
         "---",
         "## How to Get True Intramarket Prices",
@@ -324,6 +499,12 @@ def run() -> None:
 
         cmp, trades_clean = comparison_metrics(wf_gen, "pred_prob_clean")
 
+        # Bootstrap CI on clean returns
+        if not trades_clean.empty:
+            ci = bootstrap_sharpe_ci(trades_clean["pnl"])
+            cmp["clean"]["sharpe_ci_lower"] = round(ci["ci_lower"], 4)
+            cmp["clean"]["sharpe_ci_upper"] = round(ci["ci_upper"], 4)
+
         # Print comparison
         clean_m = cmp.get("clean", {})
         orig_m  = cmp.get("original", {})
@@ -336,6 +517,9 @@ def run() -> None:
         print(f"{'Avg Entry':<20} {clean_m.get('avg_entry',0):>22.4f} {orig_m.get('avg_entry',0):>22.4f}")
         print(f"{'t-stat':<20} {clean_m.get('t_stat',0):>22.1f} {orig_m.get('t_stat',0):>22.1f}")
         print(f"{'Max DD':<20} {clean_m.get('max_drawdown',0):>+22.2f} {orig_m.get('max_drawdown',0):>+22.2f}")
+        ci_lo = clean_m.get("sharpe_ci_lower", "—")
+        ci_hi = clean_m.get("sharpe_ci_upper", "—")
+        print(f"{'Sharpe CI 95%':<20} [{ci_lo}, {ci_hi}]")
 
         results["General (Clean Model)"] = (cmp, clean_m)
         if not trades_clean.empty:
@@ -363,7 +547,20 @@ def run() -> None:
         print("[CleanBacktest] No WF parquets found. Run features_clean.py + model_clean.py first.")
         return
 
-    generate_report(results, trades_dict)
+    # Point 7: Robustness tests on general clean trades
+    robustness: dict = {}
+    gen_trades = trades_dict.get("General (Clean Model)")
+    gen_wf     = pd.read_parquet(PROC_DIR / "wf_clean_general.parquet") \
+                 if (PROC_DIR / "wf_clean_general.parquet").exists() else None
+    if gen_trades is not None and not gen_trades.empty:
+        print("\n[CleanBacktest] Running robustness tests...")
+        robustness = run_robustness_tests(gen_trades, gen_wf)
+        for test, m in robustness.items():
+            if m.get("n_trades", 0) >= 5:
+                print(f"  {test:<35} n={m['n_trades']:>5} | sharpe={m['sharpe']:+.2f} | "
+                      f"win={m['win_rate']:.1%} | pnl={m['total_pnl']:+.2f}")
+
+    generate_report(results, trades_dict, robustness_dict=robustness if robustness else None)
 
 
 if __name__ == "__main__":

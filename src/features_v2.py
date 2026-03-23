@@ -58,6 +58,14 @@ def load_fred() -> pd.DataFrame:
     return load_csv_or_empty(RAW_DIR / "fred_macro.csv")
 
 
+def load_coinalyze() -> pd.DataFrame:
+    return load_csv_or_empty(RAW_DIR / "coinalyze.csv")
+
+
+def load_newsapi() -> pd.DataFrame:
+    return load_csv_or_empty(RAW_DIR / "newsapi.csv")
+
+
 def load_whale_features() -> pd.DataFrame:
     f = PROC_DIR / "whale_features.parquet"
     if not f.exists():
@@ -92,12 +100,41 @@ def build_macro_features() -> pd.DataFrame:
     # FRED macro
     fred = load_fred()
 
+    # Coinalyze: BTC funding rate + open interest
+    ca = load_coinalyze()
+    btc_ca: pd.DataFrame | None = None
+    if not ca.empty and "symbol" in ca.columns:
+        btc_ca = ca[ca["symbol"].str.contains("BTC", na=False)].copy()
+        rename_map = {}
+        if "funding_rate"  in btc_ca.columns: rename_map["funding_rate"]  = "btc_funding_rate"
+        if "open_interest" in btc_ca.columns: rename_map["open_interest"] = "btc_open_interest"
+        btc_ca = btc_ca.rename(columns=rename_map)
+        ca_cols = ["date"] + [c for c in ["btc_funding_rate","btc_open_interest"] if c in btc_ca.columns]
+        btc_ca  = btc_ca[ca_cols].groupby("date").last().reset_index()
+
+    # NewsAPI: pivot category headline counts to wide format
+    news = load_newsapi()
+    news_wide: pd.DataFrame | None = None
+    if not news.empty and "category" in news.columns and "headline_count" in news.columns:
+        pivot = news.pivot_table(
+            index="date", columns="category",
+            values="headline_count", aggfunc="sum"
+        )
+        pivot.columns = [f"news_count_{c}" for c in pivot.columns]
+        news_wide = pivot.reset_index()
+        # Forward-fill: newsapi counts are sparse (daily at best)
+        news_wide = news_wide.sort_values("date").reset_index(drop=True)
+
     # Merge all on date
     macro = fg[["date","fear_greed_value"]].copy()
     if not btc.empty:
         macro = macro.merge(btc, on="date", how="left")
     if not fred.empty:
         macro = macro.merge(fred, on="date", how="left")
+    if btc_ca is not None and not btc_ca.empty:
+        macro = macro.merge(btc_ca, on="date", how="left")
+    if news_wide is not None and not news_wide.empty:
+        macro = macro.merge(news_wide, on="date", how="left")
 
     # Forward-fill macro (weekends/holidays)
     for col in macro.columns:
