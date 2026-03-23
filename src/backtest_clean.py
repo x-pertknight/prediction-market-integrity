@@ -49,10 +49,12 @@ EDGE_MULT = 0.70  # A6 Simons volume philosophy: enter when price <= pred_prob *
 # See src/risk/fees.py for full implementation.
 try:
     from risk.fees import compute_trade_fees
+    from risk.market_impact import compute_trade_impact
 except ImportError:
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).parent))
     from risk.fees import compute_trade_fees
+    from risk.market_impact import compute_trade_impact
 
 FEE_MODEL_DEFAULT = "kalshi"  # backtest uses Kalshi data → Kalshi fees by default
 
@@ -247,6 +249,16 @@ def run_backtest_clean(wf: pd.DataFrame, prob_col: str = "pred_prob_clean",
                                )
     trades["pnl_raw"]        = trades["pnl_gross"]  # backward compat
     trades["fee_model"]      = fee_model
+
+    # Market impact cost
+    vols = trades["volume_fp"] if "volume_fp" in trades.columns else pd.Series(np.nan, index=trades.index)
+    impact_df = compute_trade_impact(trades["entry_price"], vols, categories=cats)
+    trades["impact_cost"]     = impact_df["impact_cost"]
+    trades["liquidity_tier"]  = impact_df["liquidity_tier"]
+    trades["trade_allowed"]   = impact_df["trade_allowed"]
+
+    # P&L net of fees AND impact
+    trades["pnl"]            = trades["pnl"] - trades["impact_cost"]
     trades["roi"]            = trades["pnl"] / trades["entry_price"].clip(lower=1e-6)
     trades["win"]            = (trades["pnl"] > 0).astype(int)
     trades["mae"]            = np.where(trades["outcome"] == 0, trades["entry_price"], 0)
@@ -294,6 +306,9 @@ def metrics(trades: pd.DataFrame, label: str = "", bootstrap: bool = False) -> d
         "mean_mfe":       round(trades["mfe"].mean(), 4),
         "avg_fee":        round(total_fees / max(len(trades), 1), 6),
         "fee_pct_of_pnl": round(total_fees / max(abs(pnl_gross.sum()), 1e-6) * 100, 2),
+        "total_impact":   round(trades["impact_cost"].sum(), 4) if "impact_cost" in trades.columns else 0.0,
+        "avg_impact":     round(trades["impact_cost"].mean(), 6) if "impact_cost" in trades.columns else 0.0,
+        "total_costs":    round(total_fees + (trades["impact_cost"].sum() if "impact_cost" in trades.columns else 0), 4),
     }
 
     # Point 6: Bootstrap CI (only on primary metrics to avoid slowdown)
