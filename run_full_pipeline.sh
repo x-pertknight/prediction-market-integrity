@@ -57,8 +57,10 @@ echo "[Phase D] DONE at $(date -u +%H:%M:%SZ)"
 
 # ── Phase E: Backtest + report ────────────────────────────────────────────────
 echo ""
-echo "[Phase E] Backtest + full report..."
-python src/backtest_full.py
+echo "[Phase E] Backtest + full report (clean baseline — no lookahead)..."
+python src/features_clean.py
+python src/model_clean.py
+python src/backtest_clean.py
 git add reports/ data/processed/trades_*.parquet 2>/dev/null || true
 git commit -m "report: full backtest complete — weather + all-market" 2>/dev/null || true
 echo "[Phase E] DONE at $(date -u +%H:%M:%SZ)"
