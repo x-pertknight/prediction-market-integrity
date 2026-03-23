@@ -26,11 +26,11 @@ def fetch_series(series_id: str, start: str = "2020-01-01") -> pd.DataFrame:
     if not FRED_KEY:
         return pd.DataFrame(columns=["date", "value", "series_id"])
     params = {
-        "series_id":     series_id,
-        "api_key":       FRED_KEY,
-        "file_type":     "json",
+        "series_id":         series_id,
+        "api_key":           FRED_KEY,
+        "file_type":         "json",
         "observation_start": start,
-        "frequency":     "d",       # daily
+        # no frequency override — use native series frequency, then forward-fill
     }
     try:
         r = requests.get(BASE, params=params, timeout=15)
