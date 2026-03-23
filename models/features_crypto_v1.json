@@ -1,0 +1,35 @@
+{
+  "features": [
+    "market_price",
+    "price_lag1",
+    "volume_fp",
+    "volume_rank",
+    "days_in_market",
+    "day_of_week",
+    "month",
+    "doy_sin",
+    "doy_cos",
+    "floor_strike_pct",
+    "hist_win_rate_series",
+    "category_enc",
+    "fear_greed_value",
+    "btc_ret_1d",
+    "btc_ret_7d",
+    "btc_vol_20d",
+    "btc_zscore_30"
+  ],
+  "target": "outcome",
+  "n": 17,
+  "top10_importance": {
+    "hist_win_rate_series": 0.4071733337856247,
+    "floor_strike_pct": 0.2964740387771627,
+    "category_enc": 0.05911290009398842,
+    "days_in_market": 0.040703957016391415,
+    "market_price": 0.030835417773501083,
+    "doy_sin": 0.02359373658489144,
+    "doy_cos": 0.023224730289594403,
+    "price_lag1": 0.021909298727854697,
+    "fear_greed_value": 0.0178234752639319,
+    "btc_zscore_30": 0.013148886237575572
+  }
+}
