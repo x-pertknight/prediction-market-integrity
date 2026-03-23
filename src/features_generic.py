@@ -50,6 +50,7 @@ def clean_bulk(df: pd.DataFrame) -> pd.DataFrame:
     df["close_time"] = pd.to_datetime(df["close_time"], errors="coerce")
     df["open_time"]  = pd.to_datetime(df["open_time"],  errors="coerce")
     df = df[df["result"].isin(["yes", "no"])].copy()
+    df = df[df["close_time"].notna()].copy()   # drop rows with invalid/missing close_time
     df["close_date"] = df["close_time"].dt.date
     df["outcome"]    = (df["result"] == "yes").astype(int)
     for col in ["yes_bid_dollars", "yes_ask_dollars", "last_price_dollars"]:
