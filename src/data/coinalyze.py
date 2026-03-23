@@ -32,7 +32,7 @@ def _get(endpoint: str, params: dict) -> list:
 def fetch_funding_rates(symbol: str, days: int = 365) -> pd.DataFrame:
     end   = int(pd.Timestamp.utcnow().timestamp())
     start = int((pd.Timestamp.utcnow() - pd.Timedelta(days=days)).timestamp())
-    data  = _get("funding-rate-history", {"symbols": symbol, "from": start, "to": end, "resolution": "daily"})
+    data  = _get("funding-rate-history", {"symbols": symbol, "from": start, "to": end, "interval": "daily"})
     rows  = []
     for item in (data if isinstance(data, list) else []):
         for entry in item.get("history", []):
@@ -47,7 +47,7 @@ def fetch_funding_rates(symbol: str, days: int = 365) -> pd.DataFrame:
 def fetch_open_interest(symbol: str, days: int = 365) -> pd.DataFrame:
     end   = int(pd.Timestamp.utcnow().timestamp())
     start = int((pd.Timestamp.utcnow() - pd.Timedelta(days=days)).timestamp())
-    data  = _get("open-interest-history", {"symbols": symbol, "from": start, "to": end, "resolution": "daily"})
+    data  = _get("open-interest-history", {"symbols": symbol, "from": start, "to": end, "interval": "daily"})
     rows  = []
     for item in (data if isinstance(data, list) else []):
         for entry in item.get("history", []):
