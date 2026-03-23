@@ -25,6 +25,12 @@ models/*.joblib
 # Reports (generated — track in git selectively)
 reports/*.csv
 
+# Generated runtime data
+data/paper_trades/
+data/signals/
+data/whale/
+logs/
+
 # OS
 .DS_Store
 Thumbs.db
