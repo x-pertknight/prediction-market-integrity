@@ -22,37 +22,42 @@ production API key for intramarket OHLCV (`kalshi_market_history.py`).
 
 ### Clean vs Original Backtest Comparison
 
-| Metric | Clean (price_lag1) | Original (last_price — lookahead) | Δ |
+| Metric | Clean (net) | Original (net) | Δ |
 |---|---|---|---|
 | Trades | 100168 | 99425 |  |
 | Win Rate | 19.0% | 17.0% |  |
-| Total P&L | +12628.54 | +10721.89 | +1906.66 |
-| Sharpe | +5.57 | +4.94 | +0.63 |
-| Avg Entry | 0.0639 | 0.0625 |  |
-| Max DD | -15.26 | -139.24 |  |
-| t-stat | 111.0 | 98.1 |  |
+| P&L Gross | +11883.44 | +10721.89 |  |
+| Total Fees | 339.79 | 325.44 |  |
+| **P&L Net** | **+11543.65** | **+10396.45** | +1147.21 |
+| Sharpe Gross | +5.34 | +4.94 |  |
+| **Sharpe Net** | **+5.20** | **+4.80** | +0.40 |
+| Avg Entry | 0.0713 | 0.0625 |  |
+| Avg Fee/Trade | $0.0034 | $0.0033 |  |
+| Fee % of P&L | 2.9% | 3.0% |  |
+| Max DD | -26.81 | -175.80 |  |
+| t-stat | 103.7 | 95.3 |  |
 
 ### Per category Breakdown (Clean Entry)
 
 | Group | Trades | Win Rate | P&L | Sharpe | Avg Entry |
 |---|---|---|---|---|---|
-| Climate and Weather | 900 | 18% | +132.09 | +6.09 | 0.0355 |
-| Companies | 27 | 26% | +4.20 | +6.84 | 0.1037 |
-| Crypto | 71599 | 9% | +3887.18 | +3.27 | 0.0339 |
-| Economics | 165 | 48% | +61.65 | +12.38 | 0.1052 |
+| Climate and Weather | 900 | 18% | +118.91 | +5.44 | 0.0473 |
+| Companies | 27 | 26% | +4.00 | +6.62 | 0.1063 |
+| Crypto | 71599 | 9% | +3465.76 | +2.98 | 0.0377 |
+| Economics | 165 | 48% | +56.18 | +11.56 | 0.1333 |
 | Education | 1 | 0% | -0.01 | +0.00 | 0.0100 |
-| Elections | 68 | 18% | +8.81 | +5.16 | 0.0469 |
-| Entertainment | 10418 | 57% | +3683.61 | +11.30 | 0.2142 |
-| Exotics | 670 | 6% | +24.05 | +2.35 | 0.0283 |
-| Financials | 8946 | 47% | +3543.52 | +13.23 | 0.0708 |
-| Health | 8 | 25% | +1.87 | +7.94 | 0.0162 |
-| Mentions | 450 | 33% | +103.22 | +7.93 | 0.0973 |
-| Politics | 179 | 21% | +25.62 | +5.66 | 0.0636 |
-| Science and Technology | 40 | 30% | +9.93 | +8.92 | 0.0518 |
-| Social | 7 | 14% | +0.46 | +2.44 | 0.0771 |
-| Sports | 6676 | 32% | +1141.41 | +5.90 | 0.1460 |
-| Transportation | 2 | 0% | -0.48 | -134.70 | 0.2400 |
-| World | 12 | 17% | +1.41 | +4.52 | 0.0492 |
+| Elections | 68 | 18% | +8.96 | +5.31 | 0.0422 |
+| Entertainment | 10418 | 57% | +3576.50 | +10.95 | 0.2147 |
+| Exotics | 670 | 6% | +22.81 | +2.23 | 0.0283 |
+| Financials | 8946 | 47% | +3073.74 | +11.77 | 0.1197 |
+| Health | 8 | 25% | +1.86 | +7.90 | 0.0162 |
+| Mentions | 450 | 33% | +97.58 | +7.54 | 0.1043 |
+| Politics | 179 | 21% | +24.17 | +5.26 | 0.0679 |
+| Science and Technology | 40 | 30% | +8.78 | +8.08 | 0.0765 |
+| Social | 7 | 14% | -0.09 | -0.69 | 0.1486 |
+| Sports | 6676 | 32% | +1084.03 | +5.60 | 0.1468 |
+| Transportation | 2 | 0% | -0.51 | -136.87 | 0.2400 |
+| World | 12 | 17% | +0.97 | +3.69 | 0.0817 |
 
 ### Duration Split (price_lag1 reliability)
 
@@ -62,49 +67,27 @@ Long-duration categories: Politics, Elections, Companies, etc. (price_lag1 poten
 
 | Split | Trades | Win Rate | P&L | Sharpe | Avg Entry |
 |---|---|---|---|---|---|
-| Short duration | 99156 | 19.1% | +12552.20 | +5.59 | 0.0641 |
-| Long duration (weaker proxy) | 1012 | 11.5% | +76.34 | +3.85 | 0.0392 |
-
----
-## Weather (Clean Model)
-
-### Clean vs Original Backtest Comparison
-
-| Metric | Clean (price_lag1) | Original (last_price — lookahead) | Δ |
-|---|---|---|---|
-| Trades | 311 | 309 |  |
-| Win Rate | 31.2% | 12.3% |  |
-| Total P&L | +82.46 | +23.00 | +59.46 |
-| Sharpe | +9.55 | +4.12 | +5.43 |
-| Avg Entry | 0.0468 | 0.0485 |  |
-| Max DD | -0.59 | -0.71 |  |
-| t-stat | 10.6 | 4.6 |  |
-
-### Per category Breakdown (Clean Entry)
-
-| Group | Trades | Win Rate | P&L | Sharpe | Avg Entry |
-|---|---|---|---|---|---|
-| Climate and Weather | 311 | 31% | +82.46 | +9.55 | 0.0468 |
+| Short duration | 99156 | 19.1% | +11472.20 | +5.22 | 0.0716 |
+| Long duration (weaker proxy) | 1012 | 11.5% | +71.45 | +3.63 | 0.0416 |
 
 ---
 ## Sharpe Bootstrap CI (1000 resamples, 95%)
 
 | Model | Sharpe | CI 95% lower | CI 95% upper |
 |---|---|---|---|
-| General (Clean Model) | +5.57 | +5.50 | +5.65 |
-| Weather (Clean Model) | +9.55 | — | — |
+| General (Clean Model) | +5.20 | +5.13 | +5.28 |
 
 ---
 ## Robustness Tests
 
 | Test | Trades | Win Rate | Sharpe | P&L |
 |---|---|---|---|---|
-| first_half | 50084 | 13.2% | +4.86 | +4922.24 |
-| second_half | 50084 | 24.8% | +6.23 | +7706.30 |
-| excl_best_cat(Financials) | 91222 | 16.3% | +4.73 | +9085.02 |
+| first_half | 50084 | 13.2% | +4.26 | +4073.26 |
+| second_half | 50084 | 24.8% | +6.05 | +7470.39 |
+| excl_best_cat(Financials) | 91222 | 16.3% | +4.46 | +8469.91 |
 | threshold_minus20 | 86327 | 18.7% | +6.05 | +11951.39 |
 | threshold_plus20 | 117229 | 21.5% | +4.67 | +12786.06 |
-| random_50pct | 50084 | 19.0% | +5.57 | +6316.58 |
+| random_50pct | 50084 | 19.0% | +5.20 | +5765.20 |
 
 ---
 ## v3 Simons + Academic Alpha Analysis
@@ -113,15 +96,15 @@ Long-duration categories: Politics, Elections, Companies, etc. (price_lag1 poten
 
 | Regime | Trades | Win Rate | Sharpe | P&L | Kelly Mult |
 |---|---|---|---|---|---|
-| MEAN_REVERTING | 2182 | 40.5% | +1.70 | +110.31 | 1.50× |
-| TRENDING | 9329 | 46.5% | +13.15 | +3679.44 | 1.00× |
-| VOLATILE | 88657 | 15.6% | +4.81 | +8838.80 | 0.50× |
+| MEAN_REVERTING | 2182 | 40.5% | +1.24 | +80.55 | 1.50× |
+| TRENDING | 9329 | 46.5% | +11.72 | +3201.23 | 1.00× |
+| VOLATILE | 88657 | 15.6% | +4.56 | +8261.88 | 0.50× |
 
 ### Gamma Near-Expiry Sizing (Bawa 2025)
 
 | Metric | Value |
 |---|---|
-| Gamma-adjusted Sharpe | +4.3248 |
+| Gamma-adjusted Sharpe | +4.0034 |
 | Average size multiplier | 0.4225 |
 | Bucket: CRITICAL | 88394 trades |
 | Bucket: WARNING | 9766 trades |
@@ -132,9 +115,9 @@ Long-duration categories: Politics, Elections, Companies, etc. (price_lag1 poten
 
 | Metric | Value |
 |---|---|
-| TC-adjusted Sharpe | +0.7848 |
-| Average TC per trade | 0.10836 |
-| Viable trades (edge > cost) | 100.0% |
+| TC-adjusted Sharpe | -0.2511 |
+| Average TC per trade | 0.12143 |
+| Viable trades (edge > cost) | 98.9% |
 
 ### Calibration (Brier Score per category)
 
@@ -163,23 +146,23 @@ Positive bias: market overprices (avoid long) | Negative bias: underpriced (buy)
 
 | Price Bucket | Win Rate | Bias | N | Signal |
 |---|---|---|---|---|
-| 0%–10% | 0.117 | +0.067 | 82890 | OVERPRICED |
-| 10%–20% | 0.362 | +0.212 | 5331 | OVERPRICED |
-| 20%–30% | 0.467 | +0.217 | 3348 | OVERPRICED |
-| 30%–40% | 0.708 | +0.358 | 5642 | OVERPRICED |
-| 40%–50% | 0.670 | +0.220 | 1150 | OVERPRICED |
-| 50%–60% | 0.602 | +0.052 | 1762 | OVERPRICED |
-| 60%–70% | 1.000 | +0.350 | 45 | OVERPRICED |
-| 70%–80% | 0.750 | +0.000 | 0 | NEUTRAL |
-| 80%–90% | 0.850 | +0.000 | 0 | NEUTRAL |
-| 90%–100% | 0.950 | +0.000 | 0 | NEUTRAL |
+| 0%–10% | 0.107 | +0.057 | 81704 | OVERPRICED |
+| 10%–20% | 0.380 | +0.230 | 5613 | OVERPRICED |
+| 20%–30% | 0.465 | +0.215 | 3485 | OVERPRICED |
+| 30%–40% | 0.704 | +0.354 | 5646 | OVERPRICED |
+| 40%–50% | 0.662 | +0.212 | 1164 | OVERPRICED |
+| 50%–60% | 0.600 | +0.050 | 1777 | NEUTRAL |
+| 60%–70% | 0.768 | +0.118 | 69 | OVERPRICED |
+| 70%–80% | 0.776 | +0.026 | 85 | NEUTRAL |
+| 80%–90% | 0.762 | -0.088 | 21 | UNDERPRICED |
+| 90%–100% | 0.975 | +0.025 | 604 | NEUTRAL |
 
 ### Wash Trading Filter (Columbia Nov 2025)
 
 | Metric | Value |
 |---|---|
 | Wash-flagged trades | 6 (0.0%) |
-| Wash-clean Sharpe | 5.5698 |
+| Wash-clean Sharpe | 5.2019 |
 
 ---
 ## v3 vs Bawa (2025) Realistic Performance Benchmarks
@@ -189,10 +172,10 @@ Ref: Navnoor Bawa 'Mathematical Execution Behind Prediction Market Alpha' (Dec 2
 | Metric | Bawa Target (Live) | TrapTrade v3 (Backtest) |
 |---|---|---|
 | Annual Return | 15–25% | ~see Sharpe |
-| Sharpe Ratio | 2.0–2.8 | 5.5697 |
+| Sharpe Ratio | 2.0–2.8 | 5.2019 |
 | Win Rate | 52–58% | 0.19 |
 | Avg Edge/Trade | 2–4% | see avg_entry |
-| Max Drawdown | 12–18% | -15.26 |
+| Max Drawdown | 12–18% | -26.8133 |
 | Capital Util. | 40–60% | TBD (live trading) |
 | Entry Threshold | v2: ×0.5 | v3: ×0.7 |
 

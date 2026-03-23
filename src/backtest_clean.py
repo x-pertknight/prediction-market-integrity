@@ -43,15 +43,18 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 EDGE_MULT = 0.70  # A6 Simons volume philosophy: enter when price <= pred_prob * 0.70
                   # was 0.50 (only 2× edge); 0.70 targets 1.43× edge = more trades, smaller edge per trade
 
-# ── Point 5: Fee models ───────────────────────────────────────────────────────
-# PnL is in [0, 1] space (entry_price and exit_price are fractions).
-# Kalshi: $0.07 per contract per side → 0.07 total round-trip per $1 nominal.
-# Polymarket: 2% of each transaction value.
-FEE_MODELS: dict[str, dict] = {
-    "none":       {"taker": 0.00, "type": "flat"},
-    "kalshi":     {"taker": 0.07, "type": "flat"},   # $0.07/contract round-trip
-    "polymarket": {"taker": 0.02, "type": "pct"},    # 2% per leg
-}
+# ── Point 5: Fee models (accurate parabolic) ────────────────────────────────
+# Kalshi: fee = 0.07 * P * (1-P) per contract, entry only (settlement free).
+# Polymarket: most markets FREE; crypto/NCAAB/some sports: P*(1-P)*0.02
+# See src/risk/fees.py for full implementation.
+try:
+    from risk.fees import compute_trade_fees
+except ImportError:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from risk.fees import compute_trade_fees
+
+FEE_MODEL_DEFAULT = "kalshi"  # backtest uses Kalshi data → Kalshi fees by default
 
 # Long-duration categories where price_lag1 is a weaker proxy
 LONG_DURATION_CATS = {"Politics", "Elections", "Companies", "Science and Technology",
@@ -59,13 +62,17 @@ LONG_DURATION_CATS = {"Politics", "Elections", "Companies", "Science and Technol
 
 
 def apply_fees(pnl: pd.Series, entry: pd.Series, exit_: pd.Series,
-               fee_model: str = "none") -> pd.Series:
-    """Subtract round-trip fees from PnL series."""
-    fm = FEE_MODELS.get(fee_model, FEE_MODELS["none"])
-    if fm["type"] == "flat":
-        return pnl - fm["taker"]  # flat cost per contract (Kalshi: $0.07)
-    else:  # pct
-        return pnl - entry * fm["taker"] - exit_ * fm["taker"]
+               fee_model: str = "none",
+               categories: pd.Series | None = None) -> tuple[pd.Series, pd.Series]:
+    """
+    Subtract accurate fees from PnL series.
+    Returns (pnl_net, fee_total) tuple.
+    """
+    if fee_model == "none":
+        return pnl, pd.Series(0.0, index=pnl.index)
+    fees_df = compute_trade_fees(entry, exit_, fee_model=fee_model,
+                                 categories=categories)
+    return pnl - fees_df["fee_total"], fees_df["fee_total"]
 
 
 # ── Point 6: Bootstrap CI ─────────────────────────────────────────────────────
@@ -231,11 +238,14 @@ def run_backtest_clean(wf: pd.DataFrame, prob_col: str = "pred_prob_clean",
             print(f"  [{label}] OHLCV entry override: {ohlcv_overrides}/{len(trades)} trades")
 
     trades["exit_price"]     = trades["outcome"].astype(float)
-    trades["pnl_raw"]        = trades["exit_price"] - trades["entry_price"]
-    trades["pnl"]            = apply_fees(
-                                   trades["pnl_raw"], trades["entry_price"],
-                                   trades["exit_price"], fee_model
+    trades["pnl_gross"]      = trades["exit_price"] - trades["entry_price"]
+    cats = trades["category"] if "category" in trades.columns else None
+    trades["pnl"], trades["fee_paid"] = apply_fees(
+                                   trades["pnl_gross"], trades["entry_price"],
+                                   trades["exit_price"], fee_model,
+                                   categories=cats,
                                )
+    trades["pnl_raw"]        = trades["pnl_gross"]  # backward compat
     trades["fee_model"]      = fee_model
     trades["roi"]            = trades["pnl"] / trades["entry_price"].clip(lower=1e-6)
     trades["win"]            = (trades["pnl"] > 0).astype(int)
@@ -260,19 +270,30 @@ def metrics(trades: pd.DataFrame, label: str = "", bootstrap: bool = False) -> d
     t_stat = pnl.mean() / pnl.std() * np.sqrt(len(pnl)) if pnl.std() > 0 else 0
     sharpe = round(pnl.mean() / pnl.std() * np.sqrt(252), 4) if pnl.std() > 0 else 0
 
+    # Gross metrics (before fees)
+    pnl_gross = trades["pnl_gross"] if "pnl_gross" in trades.columns else pnl
+    sharpe_gross = round(pnl_gross.mean() / pnl_gross.std() * np.sqrt(252), 4) \
+                   if pnl_gross.std() > 0 else 0
+    total_fees = trades["fee_paid"].sum() if "fee_paid" in trades.columns else 0.0
+
     out = {
-        "label":        label,
-        "n_trades":     len(trades),
-        "win_rate":     round(trades["win"].mean(), 4),
-        "total_pnl":    round(pnl.sum(), 4),
-        "mean_pnl":     round(pnl.mean(), 4),
-        "sharpe":       sharpe,
-        "sharpe_roi":   round(roi.mean() / roi.std() * np.sqrt(252), 4) if roi.std() > 0 else 0,
-        "t_stat":       round(t_stat, 2),
-        "max_drawdown": round(mdd, 4),
-        "avg_entry":    round(trades["entry_price"].mean(), 4),
-        "mean_mae":     round(trades["mae"].mean(), 4),
-        "mean_mfe":     round(trades["mfe"].mean(), 4),
+        "label":          label,
+        "n_trades":       len(trades),
+        "win_rate":       round(trades["win"].mean(), 4),
+        "total_pnl":      round(pnl.sum(), 4),
+        "total_pnl_gross": round(pnl_gross.sum(), 4),
+        "total_fees":     round(total_fees, 4),
+        "mean_pnl":       round(pnl.mean(), 4),
+        "sharpe":         sharpe,
+        "sharpe_gross":   sharpe_gross,
+        "sharpe_roi":     round(roi.mean() / roi.std() * np.sqrt(252), 4) if roi.std() > 0 else 0,
+        "t_stat":         round(t_stat, 2),
+        "max_drawdown":   round(mdd, 4),
+        "avg_entry":      round(trades["entry_price"].mean(), 4),
+        "mean_mae":       round(trades["mae"].mean(), 4),
+        "mean_mfe":       round(trades["mfe"].mean(), 4),
+        "avg_fee":        round(total_fees / max(len(trades), 1), 6),
+        "fee_pct_of_pnl": round(total_fees / max(abs(pnl_gross.sum()), 1e-6) * 100, 2),
     }
 
     # Point 6: Bootstrap CI (only on primary metrics to avoid slowdown)
@@ -285,12 +306,14 @@ def metrics(trades: pd.DataFrame, label: str = "", bootstrap: bool = False) -> d
 
 
 def comparison_metrics(wf: pd.DataFrame, prob_col: str,
-                        ohlcv_dict: dict | None = None) -> dict:
+                        ohlcv_dict: dict | None = None,
+                        fee_model: str = "kalshi") -> dict:
     """Run both clean (price_lag1/ohlcv) and original (market_price) backtests for comparison."""
     result = {}
 
     # Clean backtest (with optional OHLCV upgrade)
-    trades_clean = run_backtest_clean(wf, prob_col, ohlcv_dict=ohlcv_dict)
+    trades_clean = run_backtest_clean(wf, prob_col, fee_model=fee_model,
+                                      ohlcv_dict=ohlcv_dict)
     label = "clean (ohlcv entry)" if ohlcv_dict else "clean (price_lag1 entry)"
     result["clean"] = metrics(trades_clean, label)
 
@@ -306,7 +329,11 @@ def comparison_metrics(wf: pd.DataFrame, prob_col: str,
         if not trades_orig.empty:
             trades_orig["entry_price"]    = trades_orig["market_price"]
             trades_orig["exit_price"]     = trades_orig["outcome"].astype(float)
-            trades_orig["pnl"]            = trades_orig["exit_price"] - trades_orig["entry_price"]
+            trades_orig["pnl_gross"]      = trades_orig["exit_price"] - trades_orig["entry_price"]
+            cats_orig = trades_orig["category"] if "category" in trades_orig.columns else None
+            trades_orig["pnl"], trades_orig["fee_paid"] = apply_fees(
+                trades_orig["pnl_gross"], trades_orig["entry_price"],
+                trades_orig["exit_price"], fee_model, categories=cats_orig)
             trades_orig["roi"]            = trades_orig["pnl"] / trades_orig["entry_price"].clip(lower=1e-6)
             trades_orig["win"]            = (trades_orig["pnl"] > 0).astype(int)
             trades_orig["mae"]            = np.where(trades_orig["outcome"] == 0, trades_orig["entry_price"], 0)
@@ -383,21 +410,37 @@ def generate_report(results: dict, trades_dict: dict,
             "### Clean vs Original Backtest Comparison",
             "",
             md_table(
-                ["Metric", "Clean (price_lag1)", "Original (last_price — lookahead)", "Δ"],
+                ["Metric", "Clean (net)", "Original (net)", "Δ"],
                 [
-                    ["Trades",     clean_m.get("n_trades",0),    orig_m.get("n_trades",0), ""],
-                    ["Win Rate",   f"{clean_m.get('win_rate',0):.1%}", f"{orig_m.get('win_rate',0):.1%}", ""],
-                    ["Total P&L",  f"{clean_m.get('total_pnl',0):+.2f}", f"{orig_m.get('total_pnl',0):+.2f}",
+                    ["Trades",       clean_m.get("n_trades",0),    orig_m.get("n_trades",0), ""],
+                    ["Win Rate",     f"{clean_m.get('win_rate',0):.1%}", f"{orig_m.get('win_rate',0):.1%}", ""],
+                    ["P&L Gross",    f"{clean_m.get('total_pnl_gross',0):+.2f}", f"{orig_m.get('total_pnl_gross',0):+.2f}", ""],
+                    ["Total Fees",   f"{clean_m.get('total_fees',0):.2f}", f"{orig_m.get('total_fees',0):.2f}", ""],
+                    ["**P&L Net**",  f"**{clean_m.get('total_pnl',0):+.2f}**", f"**{orig_m.get('total_pnl',0):+.2f}**",
                      f"{clean_m.get('total_pnl',0)-orig_m.get('total_pnl',0):+.2f}"],
-                    ["Sharpe",     f"{clean_m.get('sharpe',0):+.2f}",   f"{orig_m.get('sharpe',0):+.2f}",
+                    ["Sharpe Gross", f"{clean_m.get('sharpe_gross',0):+.2f}",   f"{orig_m.get('sharpe_gross',0):+.2f}", ""],
+                    ["**Sharpe Net**", f"**{clean_m.get('sharpe',0):+.2f}**",   f"**{orig_m.get('sharpe',0):+.2f}**",
                      f"{clean_m.get('sharpe',0)-orig_m.get('sharpe',0):+.2f}"],
-                    ["Avg Entry",  f"{clean_m.get('avg_entry',0):.4f}", f"{orig_m.get('avg_entry',0):.4f}", ""],
-                    ["Max DD",     f"{clean_m.get('max_drawdown',0):+.2f}", f"{orig_m.get('max_drawdown',0):+.2f}", ""],
-                    ["t-stat",     f"{clean_m.get('t_stat',0):.1f}",   f"{orig_m.get('t_stat',0):.1f}", ""],
+                    ["Avg Entry",    f"{clean_m.get('avg_entry',0):.4f}", f"{orig_m.get('avg_entry',0):.4f}", ""],
+                    ["Avg Fee/Trade", f"${clean_m.get('avg_fee',0):.4f}", f"${orig_m.get('avg_fee',0):.4f}", ""],
+                    ["Fee % of P&L", f"{clean_m.get('fee_pct_of_pnl',0):.1f}%", f"{orig_m.get('fee_pct_of_pnl',0):.1f}%", ""],
+                    ["Max DD",       f"{clean_m.get('max_drawdown',0):+.2f}", f"{orig_m.get('max_drawdown',0):+.2f}", ""],
+                    ["t-stat",       f"{clean_m.get('t_stat',0):.1f}",   f"{orig_m.get('t_stat',0):.1f}", ""],
                 ]
             ),
             "",
         ]
+
+        # Sharpe < 1.5 warning
+        _net_sharpe = clean_m.get("sharpe", 0)
+        if _net_sharpe < 1.5:
+            lines += [
+                "",
+                f"> **WARNING**: Net Sharpe {_net_sharpe:+.2f} < 1.5 — "
+                "fees erode most alpha. Consider Polymarket (zero-fee markets) "
+                "or maker orders to reduce cost.",
+                "",
+            ]
 
         # Per-category breakdown for clean trades
         trades_clean = trades_dict.get(model_label)
@@ -899,18 +942,28 @@ def run() -> None:
         # Print comparison
         clean_m = cmp.get("clean", {})
         orig_m  = cmp.get("original", {})
-        print(f"\n[CleanBacktest] ── COMPARISON ────────────────────────────────────")
-        print(f"{'Metric':<20} {'CLEAN (price_lag1)':>22} {'ORIGINAL (lookahead)':>22}")
-        print(f"{'Trades':<20} {clean_m.get('n_trades',0):>22} {orig_m.get('n_trades',0):>22}")
+        print(f"\n[CleanBacktest] ── COMPARISON (fee_model=kalshi) ────────────────────")
+        print(f"{'Metric':<20} {'CLEAN (net)':>22} {'ORIGINAL (net)':>22}")
+        print(f"{'-'*64}")
+        print(f"{'Trades':<20} {clean_m.get('n_trades',0):>22,} {orig_m.get('n_trades',0):>22,}")
         print(f"{'Win Rate':<20} {clean_m.get('win_rate',0):>22.1%} {orig_m.get('win_rate',0):>22.1%}")
-        print(f"{'Total P&L':<20} {clean_m.get('total_pnl',0):>+22.2f} {orig_m.get('total_pnl',0):>+22.2f}")
-        print(f"{'Sharpe':<20} {clean_m.get('sharpe',0):>+22.2f} {orig_m.get('sharpe',0):>+22.2f}")
+        print(f"{'P&L Gross':<20} {clean_m.get('total_pnl_gross',0):>+22.2f} {orig_m.get('total_pnl_gross',0):>+22.2f}")
+        print(f"{'Total Fees':<20} {clean_m.get('total_fees',0):>22.2f} {orig_m.get('total_fees',0):>22.2f}")
+        print(f"{'P&L Net':<20} {clean_m.get('total_pnl',0):>+22.2f} {orig_m.get('total_pnl',0):>+22.2f}")
+        print(f"{'Sharpe Gross':<20} {clean_m.get('sharpe_gross',0):>+22.2f} {orig_m.get('sharpe_gross',0):>+22.2f}")
+        print(f"{'Sharpe Net':<20} {clean_m.get('sharpe',0):>+22.2f} {orig_m.get('sharpe',0):>+22.2f}")
         print(f"{'Avg Entry':<20} {clean_m.get('avg_entry',0):>22.4f} {orig_m.get('avg_entry',0):>22.4f}")
-        print(f"{'t-stat':<20} {clean_m.get('t_stat',0):>22.1f} {orig_m.get('t_stat',0):>22.1f}")
+        print(f"{'Avg Fee/Trade':<20} {clean_m.get('avg_fee',0):>22.6f} {orig_m.get('avg_fee',0):>22.6f}")
+        print(f"{'Fee % of Gross':<20} {clean_m.get('fee_pct_of_pnl',0):>21.2f}% {orig_m.get('fee_pct_of_pnl',0):>21.2f}%")
         print(f"{'Max DD':<20} {clean_m.get('max_drawdown',0):>+22.2f} {orig_m.get('max_drawdown',0):>+22.2f}")
         ci_lo = clean_m.get("sharpe_ci_lower", "—")
         ci_hi = clean_m.get("sharpe_ci_upper", "—")
         print(f"{'Sharpe CI 95%':<20} [{ci_lo}, {ci_hi}]")
+
+        # Warning if net Sharpe < 1.5
+        net_sharpe = clean_m.get("sharpe", 0)
+        if net_sharpe < 1.5:
+            print(f"\n  ⚠️  WARNING: Net Sharpe {net_sharpe:+.2f} < 1.5 — fees erode most alpha!")
 
         results["General (Clean Model)"] = (cmp, clean_m)
         if not trades_clean.empty:

@@ -30,12 +30,17 @@ import base64
 import requests
 import pandas as pd
 from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 DEMO_BASE  = "https://demo-api.kalshi.co/trade-api/v2"
 PROD_BASE  = "https://api.elections.kalshi.com/trade-api/v2"
 RAW_DIR    = Path("data/raw")
 CACHE_DIR  = RAW_DIR / "market_history"
-REQ_DELAY  = 0.1   # 100ms between requests
+REQ_DELAY  = 0.05  # 50ms between requests
 
 
 # ── RSA-PSS Auth ───────────────────────────────────────────────────────────────
@@ -135,6 +140,20 @@ def _get(url: str, params: dict | None = None, headers: dict | None = None,
     return None
 
 
+BASE_URL = "https://api.elections.kalshi.com"  # without /trade-api/v2 suffix
+
+
+def _get_series_ticker(ticker: str) -> str | None:
+    """Fetch market details to get its series_ticker."""
+    path = f"/trade-api/v2/markets/{ticker}"
+    auth_headers = _sign_request("GET", path)
+    data = _get(f"{BASE_URL}{path}", headers=auth_headers)
+    if data:
+        market = data.get("market", data)
+        return market.get("series_ticker") or market.get("event_ticker")
+    return None
+
+
 # ── Production API (RSA-PSS auth required) ─────────────────────────────────────
 
 def fetch_market_ohlcv(ticker: str, period_minutes: int = 1440) -> pd.DataFrame:
@@ -169,45 +188,90 @@ def fetch_market_ohlcv(ticker: str, period_minutes: int = 1440) -> pd.DataFrame:
             "  Example: KALSHI_PRIVATE_KEY_PATH=/path/to/kalshi_private_key.pem"
         )
 
-    path = f"/trade-api/v2/markets/{ticker}/history"
+    # Kalshi candlestick endpoints (as of 2025):
+    #   Active markets:    /series/{series_ticker}/markets/{ticker}/candlesticks
+    #   Historical/closed: /historical/markets/{ticker}/candlesticks
+    # Need series_ticker first — fetch market details
+    series_ticker = _get_series_ticker(ticker)
     rows   = []
     cursor = ""
 
-    while True:
-        auth_headers = _sign_request("GET", path)
+    # Try active endpoint first, then historical fallback
+    endpoints = []
+    if series_ticker:
+        endpoints.append(f"/trade-api/v2/series/{series_ticker}/markets/{ticker}/candlesticks")
+    endpoints.append(f"/trade-api/v2/historical/markets/{ticker}/candlesticks")
+
+    # start_ts / end_ts required by Kalshi candlestick API
+    start_ts = int(time.time()) - 2 * 365 * 86400  # 2 years back
+    end_ts   = int(time.time())
+
+    data = None
+    used_endpoint = None
+    for ep_path in endpoints:
+        auth_headers = _sign_request("GET", ep_path)
         if not auth_headers:
             raise PermissionError("Failed to build auth headers — check private key.")
-
-        params: dict = {"period_interval": period_minutes, "limit": 1000}
-        if cursor:
-            params["cursor"] = cursor
-
-        data = _get(f"{PROD_BASE}/markets/{ticker}/history",
-                    params=params, headers=auth_headers)
-        if not data:
+        params: dict = {
+            "period_interval": period_minutes,
+            "start_ts": start_ts,
+            "end_ts":   end_ts,
+            "limit": 1000,
+        }
+        probe = _get(f"{BASE_URL}{ep_path}", params=params, headers=auth_headers)
+        if probe is not None:
+            data = probe
+            used_endpoint = ep_path
             break
 
-        batch  = data.get("history", [])
+    if data is None:
+        return pd.DataFrame()
+
+    # Paginate — Kalshi returns cursor for next page
+    while True:
+        batch  = data.get("candlesticks", data.get("candles", data.get("history", [])))
         cursor = data.get("cursor", "")
         rows.extend(batch)
         time.sleep(REQ_DELAY)
-
         if not cursor or not batch:
+            break
+        auth_headers = _sign_request("GET", used_endpoint)
+        params = {"period_interval": period_minutes, "start_ts": start_ts,
+                  "end_ts": end_ts, "limit": 1000, "cursor": cursor}
+        data = _get(f"{BASE_URL}{used_endpoint}", params=params, headers=auth_headers)
+        if data is None:
             break
 
     if not rows:
         return pd.DataFrame()
 
-    df = pd.DataFrame(rows)
-    # Normalise field names
-    if "ts" in df.columns:
-        df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.date
-    for col in ["open_price", "high_price", "low_price", "close_price", "volume", "open_interest"]:
+    # Normalise Kalshi candlestick format → flat DataFrame
+    # Each row: {end_period_ts, yes_bid:{open,low,high,close}, price:{open,...}, volume_fp, ...}
+    parsed = []
+    for c in rows:
+        ts = c.get("end_period_ts", 0)
+        price = c.get("price") or {}
+        yes_bid = c.get("yes_bid") or {}
+        # Kalshi uses *_dollars suffix for price fields
+        def _p(d, key):
+            return d.get(f"{key}_dollars") or d.get(key)
+        parsed.append({
+            "ts":          ts,
+            "date":        pd.Timestamp(ts, unit="s", tz="UTC").date() if ts else None,
+            "open_price":  _p(price, "open")  or _p(yes_bid, "open"),
+            "high_price":  _p(price, "high")  or _p(yes_bid, "high"),
+            "low_price":   _p(price, "low")   or _p(yes_bid, "low"),
+            "close_price": _p(price, "close") or _p(yes_bid, "close"),
+            "mean_price":  _p(price, "mean"),
+            "volume":      float(c["volume_fp"]) if c.get("volume_fp") else None,
+            "open_interest": float(c["open_interest_fp"]) if c.get("open_interest_fp") else None,
+        })
+
+    df = pd.DataFrame(parsed)
+    for col in ["open_price", "high_price", "low_price", "close_price", "mean_price", "volume", "open_interest"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    sort_col = "ts" if "ts" in df.columns else df.columns[0]
-    df = df.sort_values(sort_col).reset_index(drop=True)
+    df = df.sort_values("ts").reset_index(drop=True)
     df.to_parquet(cache_path, index=False)
     return df
 
