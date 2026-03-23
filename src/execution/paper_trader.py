@@ -1,217 +1,464 @@
 """
-src/execution/paper_trader.py
-Paper trading engine — simulates orders, tracks fills, computes slippage.
-Prepares interface for future live trading (Polymarket CLOB + Polygon wallet).
-NO real trades. NO wallet. NO real money.
+src/execution/paper_trader.py — Paper trading against Polymarket Gamma API.
 
-Future live trading path:
-  1. Replace PaperBroker with LiveBroker (uses py-clob-client)
-  2. Add wallet.sign_order(order) before submission
-  3. Remove paper simulation logic
+Polls Polymarket every 60s for active markets in target categories.
+Scores each with the trained RF model. Applies entry/exit signals,
+fee model, market impact, and circuit breaker. Logs everything.
+
+Usage:
+  python src/execution/paper_trader.py           # foreground
+  nohup python src/execution/paper_trader.py &   # background
+
+Output:
+  data/paper_trades.csv
+  logs/paper_trader.log
 """
+
 import json
-import uuid
-import random
+import logging
+import os
+import sys
+import time
+import traceback
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
 
-PAPER_DIR = Path("data/paper_trades")
+import numpy as np
+import pandas as pd
+import joblib
+import requests
 
-SLIPPAGE_BPS = 50    # 50 basis points simulated slippage for liquid markets
-FEE_PER_DOLLAR = 0.07 / 100   # Kalshi/Polymarket ~$0.07 per $1 notional
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+from risk.fees import kalshi_taker_fee, polymarket_taker_fee
+from risk.market_impact import market_impact, should_trade, liquidity_tier
+from risk.circuit_breaker import CircuitBreaker
+
+# ── Config ───────────────────────────────────────────────────────────────────
+
+GAMMA_API       = "https://gamma-api.polymarket.com/markets"
+POLL_INTERVAL   = 60      # seconds
+EDGE_MULT       = 0.70    # entry: price <= model_prob * 0.70
+EXIT_MULT       = 0.90    # exit:  price >= model_prob * 0.90
+EXPIRY_EXIT_H   = 24      # exit if expiry <= 24 hours
+TARGET_CATS     = {"weather", "crypto", "politics", "entertainment", "financials",
+                   "sports", "economics", "elections"}
+MODEL_DIR       = Path("models")
+TRADES_CSV      = Path("data/paper_trades.csv")
+LOG_DIR         = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+TRADES_CSV.parent.mkdir(parents=True, exist_ok=True)
+
+FEE_MODEL       = os.getenv("PAPER_FEE_MODEL", "polymarket")  # most Poly markets = free
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "paper_trader.log"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+log = logging.getLogger("paper_trader")
+
+# ── Features (matching CLEAN_FEATURES from features_clean.py) ────────────────
+
+CLEAN_FEATURES = [
+    "days_in_market", "floor_strike_pct", "market_type_enc", "category_enc",
+    "day_of_week", "month", "day_of_year", "doy_sin", "doy_cos",
+    "hist_win_rate_series", "volume_rank",
+    "fear_greed_value", "btc_ret_1d", "btc_ret_7d", "btc_vol_20d", "btc_zscore_30",
+    "dxy_proxy", "fed_funds_rate", "yield_10y",
+    "btc_funding_rate", "btc_open_interest",
+    "news_count_crypto", "news_count_weather", "news_count_macro",
+    "news_count_politics", "news_count_sports",
+    "smart_money_index", "whale_cluster_detected",
+]
+
+# Category encoding (same as training)
+_CAT_ENC = {
+    "Climate and Weather": 0, "Companies": 1, "Crypto": 2, "Economics": 3,
+    "Education": 4, "Elections": 5, "Entertainment": 6, "Exotics": 7,
+    "Financials": 8, "Health": 9, "Mentions": 10, "Politics": 11,
+    "Science and Technology": 12, "Social": 13, "Sports": 14,
+    "Transportation": 15, "World": 16,
+}
+# Polymarket tag → Kalshi category mapping
+_TAG_TO_CAT = {
+    "weather": "Climate and Weather",
+    "crypto": "Crypto",
+    "politics": "Politics",
+    "entertainment": "Entertainment",
+    "financials": "Financials",
+    "sports": "Sports",
+    "economics": "Economics",
+    "elections": "Elections",
+}
 
 
-# ── Order models ──────────────────────────────────────────────────────────────
+def _build_features(market: dict, macro: dict) -> np.ndarray:
+    """Build feature vector for a Polymarket market."""
+    today = date.today()
+    doy = today.timetuple().tm_yday
+
+    # Map Polymarket tags to category
+    tags = [t.lower() for t in (market.get("tags") or [])]
+    cat = "Crypto"  # default
+    for tag in tags:
+        if tag in _TAG_TO_CAT:
+            cat = _TAG_TO_CAT[tag]
+            break
+
+    vals = {
+        "days_in_market":          1,
+        "floor_strike_pct":        1.0,
+        "market_type_enc":         0,
+        "category_enc":            _CAT_ENC.get(cat, -1),
+        "day_of_week":             today.weekday(),
+        "month":                   today.month,
+        "day_of_year":             doy,
+        "doy_sin":                 np.sin(2 * np.pi * doy / 365),
+        "doy_cos":                 np.cos(2 * np.pi * doy / 365),
+        "hist_win_rate_series":    0.5,
+        "volume_rank":             0.5,
+        "fear_greed_value":        macro.get("fear_greed_value", 50.0),
+        "btc_ret_1d":              macro.get("btc_ret_1d", 0.0),
+        "btc_ret_7d":              macro.get("btc_ret_7d", 0.0),
+        "btc_vol_20d":             macro.get("btc_vol_20d", 0.0),
+        "btc_zscore_30":           macro.get("btc_zscore_30", 0.0),
+        "dxy_proxy":               macro.get("dxy_proxy", 0.0),
+        "fed_funds_rate":          macro.get("fed_funds_rate", 0.0),
+        "yield_10y":               macro.get("yield_10y", 0.0),
+        "btc_funding_rate":        macro.get("btc_funding_rate", 0.0),
+        "btc_open_interest":       macro.get("btc_open_interest", 0.0),
+        "news_count_crypto":       macro.get("news_count_crypto", 0),
+        "news_count_weather":      macro.get("news_count_weather", 0),
+        "news_count_macro":        macro.get("news_count_macro", 0),
+        "news_count_politics":     macro.get("news_count_politics", 0),
+        "news_count_sports":       macro.get("news_count_sports", 0),
+        "smart_money_index":       macro.get("smart_money_index", 50.0),
+        "whale_cluster_detected":  macro.get("whale_cluster_detected", 0),
+    }
+    return np.array([vals.get(f, 0) for f in CLEAN_FEATURES]).reshape(1, -1)
+
+
+def _load_macro() -> dict:
+    """Load latest macro features from cached files."""
+    macro = {}
+    raw = Path("data/raw")
+    fg = raw / "fear_greed.csv"
+    if fg.exists():
+        df = pd.read_csv(fg)
+        if not df.empty:
+            macro["fear_greed_value"] = float(df.iloc[-1].get("fear_greed_value", 50))
+    bn = raw / "binance_prices.csv"
+    if bn.exists():
+        df = pd.read_csv(bn)
+        btc = df[df["symbol"] == "BTCUSDT"].tail(1)
+        if not btc.empty:
+            macro["btc_ret_1d"] = float(btc.iloc[-1].get("ret_1d", 0))
+            macro["btc_ret_7d"] = float(btc.iloc[-1].get("ret_7d", 0))
+            macro["btc_vol_20d"] = float(btc.iloc[-1].get("vol_20d", 0))
+            macro["btc_zscore_30"] = float(btc.iloc[-1].get("price_zscore_30", 0))
+    return macro
+
+
+# ── Polymarket Gamma API ─────────────────────────────────────────────────────
+
+def fetch_markets(retries: int = 3) -> list[dict]:
+    """Fetch active markets from Polymarket Gamma API."""
+    delay = 2.0
+    for _ in range(retries):
+        try:
+            r = requests.get(GAMMA_API, params={"closed": "false", "limit": 200}, timeout=15)
+            if r.status_code == 200:
+                return r.json()
+            log.warning(f"Gamma API returned {r.status_code}")
+        except Exception as e:
+            log.warning(f"Gamma API error: {e}")
+        time.sleep(delay)
+        delay *= 2
+    return []
+
+
+def _market_tags(m: dict) -> set[str]:
+    """Extract lowercase tags from a Polymarket market."""
+    tags = set()
+    for t in (m.get("tags") or []):
+        tags.add(t.lower())
+    # Also check category field
+    cat = (m.get("category") or "").lower()
+    if cat:
+        tags.add(cat)
+    return tags
+
+
+def _market_price(m: dict) -> float:
+    """Get current YES price for a market."""
+    # Gamma API: outcomePrices is a JSON string like "[0.55, 0.45]"
+    prices = m.get("outcomePrices")
+    if isinstance(prices, str):
+        try:
+            parsed = json.loads(prices)
+            if parsed:
+                return float(parsed[0])
+        except (json.JSONDecodeError, IndexError):
+            pass
+    if isinstance(prices, list) and prices:
+        return float(prices[0])
+    return 0.0
+
+
+# ── Trade logging ────────────────────────────────────────────────────────────
+
+_CSV_COLS = [
+    "timestamp", "market_id", "market_question", "side", "entry_price",
+    "model_prob", "convexity_score", "regime_hmm", "fee", "impact",
+    "exit_price", "pnl_net", "cumulative_pnl",
+]
+
+
+def _log_trade(row: dict) -> None:
+    """Append a trade row to paper_trades.csv."""
+    df = pd.DataFrame([row])
+    header = not TRADES_CSV.exists()
+    df.to_csv(TRADES_CSV, mode="a", header=header, index=False)
+
+
+# ── Open positions ───────────────────────────────────────────────────────────
 
 @dataclass
-class Order:
-    market_id:    str
-    market_title: str
-    side:         str    # "buy_yes" | "buy_no"
-    size_dollars: float
-    limit_price:  float  # 0–1 scale
-    category:     str    = ""
-    model_prob:   float  = 0.0
-    order_id:     str    = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    status:       str    = "pending"   # pending | filled | cancelled
-    filled_price: float  = 0.0
-    fee:          float  = 0.0
-    timestamp:    str    = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+class PaperPosition:
+    market_id: str
+    question: str
+    side: str
+    entry_price: float
+    model_prob: float
+    fee: float
+    impact: float
+    entry_time: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
-@dataclass
-class Position:
-    order_id:     str
-    market_id:    str
-    market_title: str
-    side:         str
-    size_dollars: float
-    entry_price:  float
-    category:     str
-    model_prob:   float
-    open_time:    str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    exit_price:   float = 0.0
-    pnl:          float = 0.0
-    status:       str   = "open"   # open | closed
+# ── Main loop ────────────────────────────────────────────────────────────────
 
-
-# ── Paper broker ─────────────────────────────────────────────────────────────
-
-class PaperBroker:
-    """
-    Simulates order execution for paper trading.
-    Applies realistic slippage and fees.
-    Persists trade history to data/paper_trades/.
-    """
+class PaperTrader:
     def __init__(self):
-        PAPER_DIR.mkdir(parents=True, exist_ok=True)
-        self._log_path = PAPER_DIR / "paper_trades.jsonl"
-        self._pos_path = PAPER_DIR / "open_positions.json"
-        self.open_positions: dict[str, Position] = self._load_positions()
+        self.positions: dict[str, PaperPosition] = {}
+        self.cumulative_pnl = 0.0
+        self.model = self._load_model()
+        self.macro = _load_macro()
+        self.cb = CircuitBreaker()
+        self._running = True
 
-    def _load_positions(self) -> dict[str, Position]:
-        if self._pos_path.exists():
-            try:
-                raw = json.loads(self._pos_path.read_text())
-                return {k: Position(**v) for k, v in raw.items()}
-            except Exception:
-                pass
-        return {}
+    def _load_model(self):
+        """Load the best trained RF model."""
+        path = MODEL_DIR / "rf_clean_general.joblib"
+        if path.exists():
+            log.info(f"Loaded model: {path}")
+            return joblib.load(path)
+        # Fallback
+        for p in MODEL_DIR.glob("rf_*.joblib"):
+            log.info(f"Loaded model: {p}")
+            return joblib.load(p)
+        log.error("No trained RF model found in models/")
+        return None
 
-    def _save_positions(self):
-        data = {k: asdict(v) for k, v in self.open_positions.items()}
-        self._pos_path.write_text(json.dumps(data, indent=2))
+    def _score_market(self, market: dict) -> float | None:
+        """Score a market with the RF model. Returns predicted probability."""
+        if self.model is None:
+            return None
+        try:
+            X = _build_features(market, self.macro)
+            prob = self.model.predict_proba(X)[0][1]
+            return float(prob)
+        except Exception as e:
+            log.debug(f"Scoring failed for {market.get('question', '?')[:40]}: {e}")
+            return None
 
-    def _log_trade(self, event: dict):
-        with open(self._log_path, "a") as f:
-            f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(), **event}) + "\n")
+    def _compute_fee(self, price: float, market: dict) -> float:
+        """Compute fee based on configured fee model."""
+        if FEE_MODEL == "polymarket":
+            tags = _market_tags(market)
+            mtype = ""
+            if tags & {"crypto"}:
+                mtype = "crypto_daily"
+            elif tags & {"sports", "ncaab"}:
+                mtype = "sport_fee"
+            return polymarket_taker_fee(price, mtype)
+        return kalshi_taker_fee(price)
 
-    def _simulate_fill_price(self, limit_price: float, side: str) -> float:
-        """Apply slippage: buy fills slightly above limit, sell slightly below."""
-        slippage = SLIPPAGE_BPS / 10_000
-        if side == "buy_yes":
-            return min(limit_price * (1 + slippage), 0.999)
-        return max(limit_price * (1 - slippage), 0.001)
+    def _compute_impact(self, price: float, volume: float) -> float:
+        """Estimate market impact."""
+        vol_dollars = volume * max(price, 0.01)
+        return market_impact(price, vol_dollars)
 
-    def submit_order(self, order: Order) -> Order:
-        """Simulate order fill."""
-        fill_price = self._simulate_fill_price(order.limit_price, order.side)
-        fee        = order.size_dollars * FEE_PER_DOLLAR
-        # Simulate partial fill probability for illiquid markets (10% chance)
-        if random.random() < 0.10:
-            order.status = "cancelled"
-            order.filled_price = 0.0
-            print(f"  [Paper] Order {order.order_id} CANCELLED (simulated illiquidity)")
-        else:
-            order.status       = "filled"
-            order.filled_price = round(fill_price, 4)
-            order.fee          = round(fee, 4)
-            # Open position
-            pos = Position(
-                order_id     = order.order_id,
-                market_id    = order.market_id,
-                market_title = order.market_title,
-                side         = order.side,
-                size_dollars = order.size_dollars,
-                entry_price  = fill_price,
-                category     = order.category,
-                model_prob   = order.model_prob,
-            )
-            self.open_positions[order.market_id] = pos
-            self._save_positions()
-            print(f"  [Paper] FILLED {order.market_title[:40]} | "
-                  f"size=${order.size_dollars:.2f} @ {fill_price:.3f} | fee=${fee:.3f}")
+    def scan(self) -> None:
+        """One scan cycle: fetch markets, score, generate signals."""
+        markets = fetch_markets()
+        if not markets:
+            log.warning("No markets fetched")
+            return
 
-        self._log_trade({"event": "order", **order.to_dict()})
-        return order
+        # Refresh macro periodically
+        self.macro = _load_macro()
 
-    def close_position(self, market_id: str, outcome: int) -> float:
-        """
-        Close position at binary resolution.
-        outcome: 1 = YES won, 0 = NO won.
-        Returns PnL.
-        """
-        pos = self.open_positions.pop(market_id, None)
-        if not pos:
-            return 0.0
+        for m in markets:
+            market_id = m.get("id") or m.get("condition_id") or ""
+            question = (m.get("question") or "")[:80]
+            tags = _market_tags(m)
 
-        shares     = pos.size_dollars / pos.entry_price
-        exit_price = 1.0 if outcome == 1 else 0.0
-        gross_pnl  = shares * (exit_price - pos.entry_price)
-        fee        = pos.size_dollars * FEE_PER_DOLLAR
-        net_pnl    = gross_pnl - fee
+            # Filter by target categories
+            if not tags & TARGET_CATS:
+                continue
 
-        pos.exit_price = exit_price
-        pos.pnl        = round(net_pnl, 4)
-        pos.status     = "closed"
+            price = _market_price(m)
+            if price <= 0 or price >= 0.95:
+                continue
 
-        self._save_positions()
-        self._log_trade({"event": "close", **asdict(pos)})
+            volume = float(m.get("volume", 0) or 0)
 
-        outcome_str = "✅ WIN" if net_pnl > 0 else "❌ LOSS"
-        print(f"  [Paper] CLOSE {pos.market_title[:40]} | {outcome_str} | "
-              f"P&L=${net_pnl:+.2f}")
-        return net_pnl
+            # Check if we have an open position → check exit
+            if market_id in self.positions:
+                pos = self.positions[market_id]
+                # Exit signal: price >= model_prob * EXIT_MULT OR near expiry
+                exit_signal = price >= pos.model_prob * EXIT_MULT
+                # Check expiry
+                end_date = m.get("endDate") or m.get("end_date_iso")
+                if end_date:
+                    try:
+                        exp = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+                        hours_left = (exp - datetime.now(timezone.utc)).total_seconds() / 3600
+                        if hours_left <= EXPIRY_EXIT_H:
+                            exit_signal = True
+                    except Exception:
+                        pass
 
-    def portfolio_summary(self) -> dict:
-        all_trades = []
-        if self._log_path.exists():
-            for line in self._log_path.read_text().splitlines():
-                try:
-                    all_trades.append(json.loads(line))
-                except Exception:
-                    pass
-        closes = [t for t in all_trades if t.get("event") == "close"]
-        pnls   = [t.get("pnl", 0) for t in closes]
-        return {
-            "total_trades":    len(closes),
-            "open_positions":  len(self.open_positions),
-            "total_pnl":       round(sum(pnls), 2),
-            "win_rate":        sum(1 for p in pnls if p > 0) / len(pnls) if pnls else 0,
-            "avg_pnl":         sum(pnls) / len(pnls) if pnls else 0,
-        }
+                if exit_signal:
+                    self._paper_sell(market_id, price, m)
+                continue
 
+            # Score with model
+            prob = self._score_market(m)
+            if prob is None:
+                continue
 
-# ── Future live trading stub ──────────────────────────────────────────────────
+            # Entry signal: price <= model_prob * EDGE_MULT
+            if price > prob * EDGE_MULT:
+                continue
 
-class LiveBroker:
-    """
-    PLACEHOLDER — future live trading via Polymarket CLOB.
-    NOT IMPLEMENTED. Replace PaperBroker with this when ready.
-    Requires:
-      - py-clob-client
-      - Polygon wallet with USDC balance
-      - CLOB_API_KEY, CLOB_SECRET env vars
-    """
-    def __init__(self):
-        raise NotImplementedError(
-            "Live trading not implemented. "
-            "Use PaperBroker for simulation. "
-            "See docs/live_trading_setup.md for implementation plan."
+            # Circuit breaker check
+            cb_status = self.cb.check()
+            if not cb_status["allowed"]:
+                log.warning(f"CIRCUIT BREAKER: {cb_status['reason']}")
+                continue
+
+            # Volume/liquidity check
+            vol_dollars = volume * max(price, 0.01)
+            if not should_trade(price, vol_dollars):
+                continue
+
+            self._paper_buy(market_id, question, price, prob, m)
+
+    def _paper_buy(self, market_id: str, question: str, price: float,
+                   model_prob: float, market: dict) -> None:
+        """Log a paper BUY."""
+        fee = self._compute_fee(price, market)
+        volume = float(market.get("volume", 0) or 0)
+        impact = self._compute_impact(price, volume)
+
+        pos = PaperPosition(
+            market_id=market_id,
+            question=question,
+            side="PAPER_BUY",
+            entry_price=price,
+            model_prob=model_prob,
+            fee=fee,
+            impact=impact,
         )
+        self.positions[market_id] = pos
+
+        row = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "market_id": market_id,
+            "market_question": question,
+            "side": "PAPER_BUY",
+            "entry_price": round(price, 4),
+            "model_prob": round(model_prob, 4),
+            "convexity_score": round(model_prob - price, 4),
+            "regime_hmm": "",
+            "fee": round(fee, 6),
+            "impact": round(impact, 6),
+            "exit_price": "",
+            "pnl_net": "",
+            "cumulative_pnl": round(self.cumulative_pnl, 4),
+        }
+        _log_trade(row)
+        log.info(f"PAPER_BUY  {question[:50]} | price={price:.3f} "
+                 f"prob={model_prob:.3f} edge={model_prob/price:.1f}x fee={fee:.4f}")
+
+    def _paper_sell(self, market_id: str, exit_price: float, market: dict) -> None:
+        """Log a paper SELL."""
+        pos = self.positions.pop(market_id, None)
+        if not pos:
+            return
+
+        fee_exit = self._compute_fee(exit_price, market)
+        pnl_gross = exit_price - pos.entry_price
+        pnl_net = pnl_gross - pos.fee - fee_exit - pos.impact
+        self.cumulative_pnl += pnl_net
+
+        # Record in circuit breaker
+        self.cb.record_trade(pnl_net)
+
+        row = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "market_id": market_id,
+            "market_question": pos.question,
+            "side": "PAPER_SELL",
+            "entry_price": round(pos.entry_price, 4),
+            "model_prob": round(pos.model_prob, 4),
+            "convexity_score": round(pos.model_prob - pos.entry_price, 4),
+            "regime_hmm": "",
+            "fee": round(pos.fee + fee_exit, 6),
+            "impact": round(pos.impact, 6),
+            "exit_price": round(exit_price, 4),
+            "pnl_net": round(pnl_net, 4),
+            "cumulative_pnl": round(self.cumulative_pnl, 4),
+        }
+        _log_trade(row)
+        tag = "WIN" if pnl_net > 0 else "LOSS"
+        log.info(f"PAPER_SELL {pos.question[:50]} | {tag} pnl={pnl_net:+.4f} "
+                 f"cum={self.cumulative_pnl:+.4f}")
+
+    def run(self) -> None:
+        """Main polling loop."""
+        log.info(f"Paper trader started | poll={POLL_INTERVAL}s | "
+                 f"edge={EDGE_MULT} | fee_model={FEE_MODEL}")
+        while self._running:
+            try:
+                self.scan()
+                log.info(f"Positions: {len(self.positions)} | "
+                         f"Cum P&L: {self.cumulative_pnl:+.4f}")
+            except KeyboardInterrupt:
+                log.info("Stopped by user")
+                break
+            except Exception as e:
+                log.error(f"Scan error: {e}\n{traceback.format_exc()}")
+            time.sleep(POLL_INTERVAL)
+
+    def stop(self) -> None:
+        self._running = False
 
 
 if __name__ == "__main__":
-    broker = PaperBroker()
-
-    # Test buy
-    order = broker.submit_order(Order(
-        market_id    = "test_mkt_001",
-        market_title = "Will NYC high temp exceed 75°F on Apr 1, 2026?",
-        side         = "buy_yes",
-        size_dollars = 20.0,
-        limit_price  = 0.12,
-        category     = "weather",
-        model_prob   = 0.28,
-    ))
-    print(f"\nOrder: {order.status} @ {order.filled_price}")
-
-    # Simulate resolution
-    pnl = broker.close_position("test_mkt_001", outcome=1)
-    print(f"PnL: ${pnl:+.2f}")
-    print(f"\nPortfolio: {json.dumps(broker.portfolio_summary(), indent=2)}")
+    trader = PaperTrader()
+    trader.run()
