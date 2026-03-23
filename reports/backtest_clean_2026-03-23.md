@@ -24,35 +24,35 @@ production API key for intramarket OHLCV (`kalshi_market_history.py`).
 
 | Metric | Clean (price_lag1) | Original (last_price — lookahead) | Δ |
 |---|---|---|---|
-| Trades | 98825 | 98643 |  |
-| Win Rate | 14.2% | 12.8% |  |
-| Total P&L | +10383.12 | +9033.86 | +1349.26 |
-| Sharpe | +4.98 | +4.52 | +0.46 |
-| Avg Entry | 0.0368 | 0.0368 |  |
-| Max DD | -5.91 | -39.79 |  |
-| t-stat | 98.7 | 89.4 |  |
+| Trades | 100168 | 99425 |  |
+| Win Rate | 19.0% | 17.0% |  |
+| Total P&L | +12628.54 | +10721.89 | +1906.66 |
+| Sharpe | +5.57 | +4.94 | +0.63 |
+| Avg Entry | 0.0639 | 0.0625 |  |
+| Max DD | -15.26 | -139.24 |  |
+| t-stat | 111.0 | 98.1 |  |
 
 ### Per category Breakdown (Clean Entry)
 
 | Group | Trades | Win Rate | P&L | Sharpe | Avg Entry |
 |---|---|---|---|---|---|
-| Climate and Weather | 904 | 18% | +131.34 | +6.06 | 0.0328 |
-| Companies | 25 | 12% | +2.02 | +3.90 | 0.0392 |
-| Crypto | 76137 | 7% | +3432.30 | +2.89 | 0.0258 |
-| Economics | 144 | 43% | +55.11 | +12.30 | 0.0478 |
+| Climate and Weather | 900 | 18% | +132.09 | +6.09 | 0.0355 |
+| Companies | 27 | 26% | +4.20 | +6.84 | 0.1037 |
+| Crypto | 71599 | 9% | +3887.18 | +3.27 | 0.0339 |
+| Economics | 165 | 48% | +61.65 | +12.38 | 0.1052 |
 | Education | 1 | 0% | -0.01 | +0.00 | 0.0100 |
-| Elections | 65 | 18% | +9.83 | +6.10 | 0.0334 |
-| Entertainment | 6497 | 46% | +2288.31 | +11.21 | 0.1126 |
-| Exotics | 704 | 6% | +22.57 | +2.13 | 0.0290 |
-| Financials | 8430 | 44% | +3363.86 | +13.12 | 0.0447 |
+| Elections | 68 | 18% | +8.81 | +5.16 | 0.0469 |
+| Entertainment | 10418 | 57% | +3683.61 | +11.30 | 0.2142 |
+| Exotics | 670 | 6% | +24.05 | +2.35 | 0.0283 |
+| Financials | 8946 | 47% | +3543.52 | +13.23 | 0.0708 |
 | Health | 8 | 25% | +1.87 | +7.94 | 0.0162 |
-| Mentions | 405 | 29% | +91.37 | +7.97 | 0.0682 |
-| Politics | 167 | 19% | +25.47 | +6.20 | 0.0391 |
-| Science and Technology | 36 | 25% | +8.06 | +8.09 | 0.0261 |
-| Social | 6 | 17% | +0.86 | +5.55 | 0.0233 |
-| Sports | 5284 | 27% | +948.82 | +6.45 | 0.0884 |
-| Transportation | 1 | 0% | -0.26 | +0.00 | 0.2600 |
-| World | 11 | 18% | +1.60 | +5.49 | 0.0364 |
+| Mentions | 450 | 33% | +103.22 | +7.93 | 0.0973 |
+| Politics | 179 | 21% | +25.62 | +5.66 | 0.0636 |
+| Science and Technology | 40 | 30% | +9.93 | +8.92 | 0.0518 |
+| Social | 7 | 14% | +0.46 | +2.44 | 0.0771 |
+| Sports | 6676 | 32% | +1141.41 | +5.90 | 0.1460 |
+| Transportation | 2 | 0% | -0.48 | -134.70 | 0.2400 |
+| World | 12 | 17% | +1.41 | +4.52 | 0.0492 |
 
 ### Duration Split (price_lag1 reliability)
 
@@ -62,8 +62,8 @@ Long-duration categories: Politics, Elections, Companies, etc. (price_lag1 poten
 
 | Split | Trades | Win Rate | P&L | Sharpe | Avg Entry |
 |---|---|---|---|---|---|
-| Short duration | 97802 | 14.2% | +10310.85 | +5.00 | 0.0368 |
-| Long duration (weaker proxy) | 1023 | 10.2% | +72.27 | +3.73 | 0.0310 |
+| Short duration | 99156 | 19.1% | +12552.20 | +5.59 | 0.0641 |
+| Long duration (weaker proxy) | 1012 | 11.5% | +76.34 | +3.85 | 0.0392 |
 
 ---
 ## Weather (Clean Model)
@@ -72,53 +72,159 @@ Long-duration categories: Politics, Elections, Companies, etc. (price_lag1 poten
 
 | Metric | Clean (price_lag1) | Original (last_price — lookahead) | Δ |
 |---|---|---|---|
-| Trades | 300 | 282 |  |
-| Win Rate | 28.7% | 8.2% |  |
-| Total P&L | +76.01 | +13.88 | +62.13 |
-| Sharpe | +9.16 | +2.98 | +6.18 |
-| Avg Entry | 0.0333 | 0.0323 |  |
-| Max DD | -0.41 | -1.52 |  |
-| t-stat | 10.0 | 3.1 |  |
+| Trades | 311 | 309 |  |
+| Win Rate | 31.2% | 12.3% |  |
+| Total P&L | +82.46 | +23.00 | +59.46 |
+| Sharpe | +9.55 | +4.12 | +5.43 |
+| Avg Entry | 0.0468 | 0.0485 |  |
+| Max DD | -0.59 | -0.71 |  |
+| t-stat | 10.6 | 4.6 |  |
 
 ### Per category Breakdown (Clean Entry)
 
 | Group | Trades | Win Rate | P&L | Sharpe | Avg Entry |
 |---|---|---|---|---|---|
-| Climate and Weather | 300 | 29% | +76.01 | +9.16 | 0.0333 |
+| Climate and Weather | 311 | 31% | +82.46 | +9.55 | 0.0468 |
 
 ---
 ## Sharpe Bootstrap CI (1000 resamples, 95%)
 
 | Model | Sharpe | CI 95% lower | CI 95% upper |
 |---|---|---|---|
-| General (Clean Model) | +4.98 | +4.91 | +5.05 |
-| Weather (Clean Model) | +9.16 | — | — |
+| General (Clean Model) | +5.57 | +5.50 | +5.65 |
+| Weather (Clean Model) | +9.55 | — | — |
 
 ---
 ## Robustness Tests
 
 | Test | Trades | Win Rate | Sharpe | P&L |
 |---|---|---|---|---|
-| first_half | 49412 | 12.1% | +4.70 | +4646.13 |
-| second_half | 49413 | 16.3% | +5.26 | +5736.99 |
-| excl_best_cat(Financials) | 90395 | 11.4% | +4.07 | +7019.26 |
-| threshold_minus20 | 87908 | 13.6% | +5.13 | +9506.54 |
-| threshold_plus20 | 106782 | 14.4% | +4.81 | +10787.61 |
-| random_50pct | 49412 | 14.0% | +4.93 | +5114.31 |
+| first_half | 50084 | 13.2% | +4.86 | +4922.24 |
+| second_half | 50084 | 24.8% | +6.23 | +7706.30 |
+| excl_best_cat(Financials) | 91222 | 16.3% | +4.73 | +9085.02 |
+| threshold_minus20 | 86327 | 18.7% | +6.05 | +11951.39 |
+| threshold_plus20 | 117229 | 21.5% | +4.67 | +12786.06 |
+| random_50pct | 50084 | 19.0% | +5.57 | +6316.58 |
 
 ---
-## How to Get True Intramarket Prices
+## v3 Simons + Academic Alpha Analysis
 
-Set `KALSHI_API_KEY` and run:
+### HMM Regime Performance (3-state Gaussian HMM)
+
+| Regime | Trades | Win Rate | Sharpe | P&L | Kelly Mult |
+|---|---|---|---|---|---|
+| MEAN_REVERTING | 2182 | 40.5% | +1.70 | +110.31 | 1.50× |
+| TRENDING | 9329 | 46.5% | +13.15 | +3679.44 | 1.00× |
+| VOLATILE | 88657 | 15.6% | +4.81 | +8838.80 | 0.50× |
+
+### Gamma Near-Expiry Sizing (Bawa 2025)
+
+| Metric | Value |
+|---|---|
+| Gamma-adjusted Sharpe | +4.3248 |
+| Average size multiplier | 0.4225 |
+| Bucket: CRITICAL | 88394 trades |
+| Bucket: WARNING | 9766 trades |
+| Bucket: NORMAL | 1261 trades |
+| Bucket: CAUTION | 747 trades |
+
+### Transaction Cost Impact (Almgren-Chriss model)
+
+| Metric | Value |
+|---|---|
+| TC-adjusted Sharpe | +0.7848 |
+| Average TC per trade | 0.10836 |
+| Viable trades (edge > cost) | 100.0% |
+
+### Calibration (Brier Score per category)
+
+**Global Brier Score: 0.07374** (random=0.25, perfect=0.00)
+
+| Category | Brier Score | Sizing Mult | Status |
+|---|---|---|---|
+| Climate and Weather | 0.15076 | 1.0× | ✓ OK |
+| Companies | 0.14904 | 1.0× | ✓ OK |
+| Crypto | 0.03969 | 1.0× | ✓ OK |
+| Economics | 0.21039 | 0.5× | ⚠️ Miscalibrated |
+| Elections | 0.22079 | 0.5× | ⚠️ Miscalibrated |
+| Entertainment | 0.24916 | 0.5× | ⚠️ Miscalibrated |
+| Exotics | 0.08606 | 1.0× | ✓ OK |
+| Financials | 0.21312 | 0.5× | ⚠️ Miscalibrated |
+| Mentions | 0.24352 | 0.5× | ⚠️ Miscalibrated |
+| Politics | 0.13980 | 1.0× | ✓ OK |
+| Science and Technology | 0.18593 | 1.0× | ✓ OK |
+| Sports | 0.20959 | 0.5× | ⚠️ Miscalibrated |
+| World | 0.22097 | 0.5× | ⚠️ Miscalibrated |
+
+### Favorite-Longshot Bias (UCD Working Paper WP2025_19)
+
+bias = actual_win_rate - midpoint_of_price_bucket
+Positive bias: market overprices (avoid long) | Negative bias: underpriced (buy)
+
+| Price Bucket | Win Rate | Bias | N | Signal |
+|---|---|---|---|---|
+| 0%–10% | 0.117 | +0.067 | 82890 | OVERPRICED |
+| 10%–20% | 0.362 | +0.212 | 5331 | OVERPRICED |
+| 20%–30% | 0.467 | +0.217 | 3348 | OVERPRICED |
+| 30%–40% | 0.708 | +0.358 | 5642 | OVERPRICED |
+| 40%–50% | 0.670 | +0.220 | 1150 | OVERPRICED |
+| 50%–60% | 0.602 | +0.052 | 1762 | OVERPRICED |
+| 60%–70% | 1.000 | +0.350 | 45 | OVERPRICED |
+| 70%–80% | 0.750 | +0.000 | 0 | NEUTRAL |
+| 80%–90% | 0.850 | +0.000 | 0 | NEUTRAL |
+| 90%–100% | 0.950 | +0.000 | 0 | NEUTRAL |
+
+### Wash Trading Filter (Columbia Nov 2025)
+
+| Metric | Value |
+|---|---|
+| Wash-flagged trades | 6 (0.0%) |
+| Wash-clean Sharpe | 5.5698 |
+
+---
+## v3 vs Bawa (2025) Realistic Performance Benchmarks
+
+Ref: Navnoor Bawa 'Mathematical Execution Behind Prediction Market Alpha' (Dec 2025)
+
+| Metric | Bawa Target (Live) | TrapTrade v3 (Backtest) |
+|---|---|---|
+| Annual Return | 15–25% | ~see Sharpe |
+| Sharpe Ratio | 2.0–2.8 | 5.5697 |
+| Win Rate | 52–58% | 0.19 |
+| Avg Edge/Trade | 2–4% | see avg_entry |
+| Max Drawdown | 12–18% | -15.26 |
+| Capital Util. | 40–60% | TBD (live trading) |
+| Entry Threshold | v2: ×0.5 | v3: ×0.7 |
+
+⚠️ **Sanity check**: TrapTrade backtest Sharpe >2.8 likely reflects:
+  1. price_lag1 proxy still overfits short-duration series
+  2. Limited history (Kalshi launched Apr 2025 → ~11 months data)
+  3. No live execution costs, slippage, or capital constraints
+  Strategy needs live paper trading to validate real-world performance.
+
+---
+## How to Enable True Intramarket OHLCV Entry Prices
+
+The backtest supports true intramarket entry prices via Kalshi prod API.
+When OHLCV is available, `entry_source='ohlcv'` replaces `price_lag1`.
+
+**Setup:**
 ```bash
-python3 src/kalshi_market_history.py <ticker>
+# 1. KALSHI_API_KEY is already set in .env
+# 2. Add your RSA private key path:
+echo 'KALSHI_PRIVATE_KEY_PATH=/path/to/kalshi_private_key.pem' >> .env
 ```
-This uses `GET /trade-api/v2/markets/{ticker}/history` (prod API, requires auth).
-Once OHLCV data is available, re-run this backtest — entry_source will show 'ohlcv'.
+The PEM file was generated when you created the API key in Kalshi's dashboard.
+It is your local RSA private key — never transmitted to Kalshi.
+
+Once configured, re-running `python3 src/backtest_clean.py` will automatically:
+  1. Fetch OHLCV for all signal tickers via `GET /trade-api/v2/markets/{ticker}/history`
+  2. Override price_lag1 with first-day open price where available
+  3. Report entry_source breakdown (ohlcv vs price_lag1)
 
 ---
 ## Caveats
 - All P&L is hypothetical. Zero real trades.
-- price_lag1 proxy is best available without production API auth.
+- price_lag1 proxy is best available without RSA private key configured.
 - Model (pred_prob_clean) trained on features that exclude market_price.
 - AUC reduction vs original model is expected (market_price was a strong feature).

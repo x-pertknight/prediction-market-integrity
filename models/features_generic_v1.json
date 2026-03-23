@@ -1,0 +1,21 @@
+{
+  "features": [
+    "market_price",
+    "price_lag1",
+    "volume_fp",
+    "volume_rank",
+    "days_in_market",
+    "day_of_week",
+    "month",
+    "doy_sin",
+    "doy_cos",
+    "floor_strike_pct",
+    "hist_win_rate_series",
+    "category_enc",
+    "market_type_enc"
+  ],
+  "target": "outcome",
+  "n_features": 13,
+  "wf_auc": 0.9348,
+  "wf_folds": 8
+}

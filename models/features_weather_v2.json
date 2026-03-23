@@ -11,6 +11,8 @@
     "doy_cos",
     "floor_strike_pct",
     "hist_win_rate_series",
+    "category_enc",
+    "market_type_enc",
     "tmax_roll3",
     "tmax_roll7",
     "tmax_roll14",
@@ -22,22 +24,10 @@
     "bracket_dist_lag1",
     "bracket_dist_roll7",
     "bracket_pct_roll7",
-    "bracket_strike",
-    "fear_greed_value",
-    "btc_ret_1d"
+    "bracket_strike"
   ],
   "target": "outcome",
-  "n": 25,
-  "top10_importance": {
-    "bracket_dist_lag1": 0.3832253974221394,
-    "hist_win_rate_series": 0.08264607049168432,
-    "market_price": 0.05775844684261666,
-    "floor_strike_pct": 0.05067450355419983,
-    "volume_fp": 0.037992077120170054,
-    "bracket_pct_roll7": 0.03261168580605466,
-    "bracket_dist_roll7": 0.030196574490452464,
-    "doy_cos": 0.028976600767329153,
-    "tmax_zscore14": 0.027186478150621276,
-    "doy_sin": 0.02363484418479783
-  }
+  "n_features": 25,
+  "wf_auc": 0.9361,
+  "wf_folds": 1
 }

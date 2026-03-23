@@ -40,7 +40,8 @@ PROC_DIR    = Path("data/processed")
 REPORTS_DIR = Path("reports")
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-EDGE_MULT = 0.5   # enter when market_price <= pred_prob * 0.5 (2× edge)
+EDGE_MULT = 0.70  # A6 Simons volume philosophy: enter when price <= pred_prob * 0.70
+                  # was 0.50 (only 2× edge); 0.70 targets 1.43× edge = more trades, smaller edge per trade
 
 # ── Point 5: Fee models ───────────────────────────────────────────────────────
 # PnL is in [0, 1] space (entry_price and exit_price are fractions).
@@ -164,10 +165,15 @@ def run_robustness_tests(trades: pd.DataFrame, wf: pd.DataFrame | None = None,
 
 
 def run_backtest_clean(wf: pd.DataFrame, prob_col: str = "pred_prob_clean",
-                       label: str = "clean", fee_model: str = "none") -> pd.DataFrame:
+                       label: str = "clean", fee_model: str = "none",
+                       ohlcv_dict: dict | None = None) -> pd.DataFrame:
     """
     Clean backtest: entry at price_lag1, signal on pred_prob_clean.
     Returns trades DataFrame.
+
+    ohlcv_dict: optional dict {ticker: DataFrame(ts, open_price, close_price, ...)}
+                fetched via kalshi_market_history.batch_fetch_ohlcv().
+                When provided, overrides price_lag1 with true OHLCV open price.
     """
     df = wf.copy()
     df["_date"] = pd.to_datetime(df["close_date"])
@@ -197,7 +203,33 @@ def run_backtest_clean(wf: pd.DataFrame, prob_col: str = "pred_prob_clean",
         print(f"  [{label}] No entry signals (clean).")
         return pd.DataFrame()
 
-    trades["entry_price"]    = trades["price_lag1"]
+    trades["entry_price"]  = trades["price_lag1"]
+    trades["entry_source"] = "price_lag1"
+
+    # Upgrade entry_price with OHLCV data when available
+    if ohlcv_dict and "ticker" in trades.columns:
+        ohlcv_overrides = 0
+        for idx, row in trades.iterrows():
+            ticker = row.get("ticker")
+            if not ticker or ticker not in ohlcv_dict:
+                continue
+            hist = ohlcv_dict[ticker]
+            if hist.empty:
+                continue
+            # Use first-day open price (cleanest: price at market open)
+            if "open_price" in hist.columns:
+                first_price = hist.iloc[0]["open_price"]
+            elif "close_price" in hist.columns:
+                first_price = hist.iloc[0]["close_price"]
+            else:
+                continue
+            if pd.notna(first_price) and first_price > 0:
+                trades.at[idx, "entry_price"]  = first_price
+                trades.at[idx, "entry_source"] = "ohlcv"
+                ohlcv_overrides += 1
+        if ohlcv_overrides > 0:
+            print(f"  [{label}] OHLCV entry override: {ohlcv_overrides}/{len(trades)} trades")
+
     trades["exit_price"]     = trades["outcome"].astype(float)
     trades["pnl_raw"]        = trades["exit_price"] - trades["entry_price"]
     trades["pnl"]            = apply_fees(
@@ -252,13 +284,15 @@ def metrics(trades: pd.DataFrame, label: str = "", bootstrap: bool = False) -> d
     return out
 
 
-def comparison_metrics(wf: pd.DataFrame, prob_col: str) -> dict:
-    """Run both clean (price_lag1) and original (market_price) backtests for comparison."""
+def comparison_metrics(wf: pd.DataFrame, prob_col: str,
+                        ohlcv_dict: dict | None = None) -> dict:
+    """Run both clean (price_lag1/ohlcv) and original (market_price) backtests for comparison."""
     result = {}
 
-    # Clean backtest
-    trades_clean = run_backtest_clean(wf, prob_col)
-    result["clean"] = metrics(trades_clean, "clean (price_lag1 entry)")
+    # Clean backtest (with optional OHLCV upgrade)
+    trades_clean = run_backtest_clean(wf, prob_col, ohlcv_dict=ohlcv_dict)
+    label = "clean (ohlcv entry)" if ohlcv_dict else "clean (price_lag1 entry)"
+    result["clean"] = metrics(trades_clean, label)
 
     # Original backtest (last_price_dollars entry — lookahead)
     if "market_price" in wf.columns:
@@ -308,7 +342,8 @@ def md_table(headers: list[str], rows: list[list]) -> str:
 
 
 def generate_report(results: dict, trades_dict: dict,
-                    robustness_dict: dict | None = None) -> None:
+                    robustness_dict: dict | None = None,
+                    v3_data: dict | None = None) -> None:
     today = date.today().isoformat()
     out   = REPORTS_DIR / f"backtest_clean_{today}.md"
 
@@ -463,21 +498,154 @@ def generate_report(results: dict, trades_dict: dict,
             )
         lines.append("")
 
+    # ── v3 Simons + Academic Alpha sections ──────────────────────────────────
+    if v3_data:
+        lines += ["---", "## v3 Simons + Academic Alpha Analysis", ""]
+
+        # HMM Regime
+        hmm_stats = v3_data.get("hmm_regime_stats")
+        if hmm_stats:
+            lines += ["### HMM Regime Performance (3-state Gaussian HMM)", ""]
+            lines.append(md_table(
+                ["Regime", "Trades", "Win Rate", "Sharpe", "P&L", "Kelly Mult"],
+                [[r, d["n_trades"], f"{d['win_rate']:.1%}", f"{d['sharpe']:+.2f}",
+                  f"{d['total_pnl']:+.2f}", f"{d.get('kelly_mult', 1.0):.2f}×"]
+                 for r, d in hmm_stats.items()]
+            ))
+            lines.append("")
+
+        # Gamma
+        gamma_sharpe = v3_data.get("gamma_sharpe")
+        if gamma_sharpe is not None:
+            lines += [
+                "### Gamma Near-Expiry Sizing (Bawa 2025)",
+                "",
+                f"| Metric | Value |",
+                f"|---|---|",
+                f"| Gamma-adjusted Sharpe | {gamma_sharpe:+.4f} |",
+                f"| Average size multiplier | {v3_data.get('gamma_avg_mult', 1.0):.4f} |",
+            ]
+            for bucket, n in (v3_data.get("gamma_buckets") or {}).items():
+                lines.append(f"| Bucket: {bucket} | {n} trades |")
+            lines.append("")
+
+        # Transaction Cost
+        tc_sharpe = v3_data.get("tc_sharpe")
+        if tc_sharpe is not None:
+            lines += [
+                "### Transaction Cost Impact (Almgren-Chriss model)",
+                "",
+                f"| Metric | Value |",
+                f"|---|---|",
+                f"| TC-adjusted Sharpe | {tc_sharpe:+.4f} |",
+                f"| Average TC per trade | {v3_data.get('tc_avg_cost', 0):.5f} |",
+                f"| Viable trades (edge > cost) | {v3_data.get('tc_viable_pct', 1.0):.1%} |",
+                "",
+            ]
+
+        # Calibration
+        cal = v3_data.get("calibration")
+        if cal and cal.category_brier:
+            lines += [
+                "### Calibration (Brier Score per category)",
+                "",
+                f"**Global Brier Score: {cal.global_brier_score:.5f}** "
+                "(random=0.25, perfect=0.00)",
+                "",
+                md_table(
+                    ["Category", "Brier Score", "Sizing Mult", "Status"],
+                    [[cat, f"{bs:.5f}", f"{cal.sizing_multiplier(cat):.1f}×",
+                      "⚠️ Miscalibrated" if bs > 0.20 else "✓ OK"]
+                     for cat, bs in sorted(cal.category_brier.items())]
+                ),
+                "",
+            ]
+
+        # Favorite-Longshot Bias
+        flb_tbl = v3_data.get("flb_table")
+        if flb_tbl is not None and not flb_tbl.empty:
+            lines += [
+                "### Favorite-Longshot Bias (UCD Working Paper WP2025_19)",
+                "",
+                "bias = actual_win_rate - midpoint_of_price_bucket",
+                "Positive bias: market overprices (avoid long) | Negative bias: underpriced (buy)",
+                "",
+                md_table(
+                    ["Price Bucket", "Win Rate", "Bias", "N", "Signal"],
+                    [[row["bucket"], f"{row['win_rate']:.3f}",
+                      f"{row['bias']:+.3f}", row["n"], row["signal"]]
+                     for _, row in flb_tbl.iterrows()]
+                ),
+                "",
+            ]
+
+        # Wash Filter
+        wash_pct = v3_data.get("wash_pct")
+        if wash_pct is not None:
+            lines += [
+                "### Wash Trading Filter (Columbia Nov 2025)",
+                "",
+                f"| Metric | Value |",
+                f"|---|---|",
+                f"| Wash-flagged trades | {v3_data.get('wash_flagged', 0):,} "
+                f"({wash_pct:.1%}) |",
+                f"| Wash-clean Sharpe | {v3_data.get('wash_clean_sharpe', 'N/A')} |",
+                "",
+            ]
+
+        # Performance vs Bawa Benchmarks (B7)
+        lines += [
+            "---",
+            "## v3 vs Bawa (2025) Realistic Performance Benchmarks",
+            "",
+            "Ref: Navnoor Bawa 'Mathematical Execution Behind Prediction Market Alpha' (Dec 2025)",
+            "",
+            md_table(
+                ["Metric", "Bawa Target (Live)", "TrapTrade v3 (Backtest)"],
+                [
+                    ["Annual Return",      "15–25%",   "~see Sharpe"],
+                    ["Sharpe Ratio",       "2.0–2.8",  f"{results.get('General (Clean Model)', ({}, {}))[0].get('clean', {}).get('sharpe', '—')}"],
+                    ["Win Rate",           "52–58%",   f"{results.get('General (Clean Model)', ({}, {}))[0].get('clean', {}).get('win_rate', '—')}"],
+                    ["Avg Edge/Trade",     "2–4%",     "see avg_entry"],
+                    ["Max Drawdown",       "12–18%",   f"{results.get('General (Clean Model)', ({}, {}))[0].get('clean', {}).get('max_drawdown', '—')}"],
+                    ["Capital Util.",      "40–60%",   "TBD (live trading)"],
+                    ["Entry Threshold",    "v2: ×0.5", f"v3: ×{EDGE_MULT}"],
+                ],
+            ),
+            "",
+            "⚠️ **Sanity check**: TrapTrade backtest Sharpe >2.8 likely reflects:",
+            "  1. price_lag1 proxy still overfits short-duration series",
+            "  2. Limited history (Kalshi launched Apr 2025 → ~11 months data)",
+            "  3. No live execution costs, slippage, or capital constraints",
+            "  Strategy needs live paper trading to validate real-world performance.",
+            "",
+        ]
+
     lines += [
         "---",
-        "## How to Get True Intramarket Prices",
+        "## How to Enable True Intramarket OHLCV Entry Prices",
         "",
-        "Set `KALSHI_API_KEY` and run:",
+        "The backtest supports true intramarket entry prices via Kalshi prod API.",
+        "When OHLCV is available, `entry_source='ohlcv'` replaces `price_lag1`.",
+        "",
+        "**Setup:**",
         "```bash",
-        "python3 src/kalshi_market_history.py <ticker>",
+        "# 1. KALSHI_API_KEY is already set in .env",
+        "# 2. Add your RSA private key path:",
+        "echo 'KALSHI_PRIVATE_KEY_PATH=/path/to/kalshi_private_key.pem' >> .env",
         "```",
-        "This uses `GET /trade-api/v2/markets/{ticker}/history` (prod API, requires auth).",
-        "Once OHLCV data is available, re-run this backtest — entry_source will show 'ohlcv'.",
+        "The PEM file was generated when you created the API key in Kalshi's dashboard.",
+        "It is your local RSA private key — never transmitted to Kalshi.",
+        "",
+        "Once configured, re-running `python3 src/backtest_clean.py` will automatically:",
+        "  1. Fetch OHLCV for all signal tickers via `GET /trade-api/v2/markets/{ticker}/history`",
+        "  2. Override price_lag1 with first-day open price where available",
+        "  3. Report entry_source breakdown (ohlcv vs price_lag1)",
         "",
         "---",
         "## Caveats",
         "- All P&L is hypothetical. Zero real trades.",
-        "- price_lag1 proxy is best available without production API auth.",
+        "- price_lag1 proxy is best available without RSA private key configured.",
         "- Model (pred_prob_clean) trained on features that exclude market_price.",
         "- AUC reduction vs original model is expected (market_price was a strong feature).",
     ]
@@ -486,9 +654,228 @@ def generate_report(results: dict, trades_dict: dict,
     print(f"\n[Report] → {out}")
 
 
+def _try_fetch_ohlcv(wf: pd.DataFrame) -> dict | None:
+    """
+    Attempt to fetch OHLCV for all signal tickers using the prod API.
+    Returns ohlcv_dict or None if auth is not configured.
+    """
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
+        from kalshi_market_history import batch_fetch_ohlcv, _has_auth
+    except ImportError:
+        return None
+
+    if not _has_auth():
+        print("[OHLCV] RSA private key not configured — using price_lag1 as entry proxy.")
+        print("  Add KALSHI_PRIVATE_KEY_PATH to .env to enable true intramarket entry prices.")
+        return None
+
+    # Get unique tickers that have entry signals
+    if "price_lag1" not in wf.columns or "pred_prob_clean" not in wf.columns:
+        return None
+    signal_rows = wf[
+        (wf["price_lag1"] > 0) &
+        (wf["price_lag1"] <= wf["pred_prob_clean"] * EDGE_MULT)
+    ]
+    if "ticker" not in signal_rows.columns:
+        return None
+    tickers = signal_rows["ticker"].dropna().unique().tolist()
+    print(f"[OHLCV] Fetching intramarket prices for {len(tickers):,} signal tickers...")
+    ohlcv_dict = batch_fetch_ohlcv(tickers, period_minutes=1440)
+    n_fetched = sum(1 for df in ohlcv_dict.values() if not df.empty)
+    print(f"[OHLCV] Fetched: {n_fetched}/{len(tickers)} tickers with data")
+    return ohlcv_dict if n_fetched > 0 else None
+
+
+def _load_simons_modules():
+    """Lazy-load Simons + Academic Alpha modules. Returns dict of modules (None if unavailable)."""
+    import sys
+    src = Path(__file__).parent
+    sys.path.insert(0, str(src))
+    mods = {}
+    try:
+        from models.hmm_regime import CategoryHMMRegistry
+        mods["hmm"] = CategoryHMMRegistry
+    except Exception as e:
+        print(f"[v3] HMM not loaded: {e}")
+    try:
+        from alpha.favorite_longshot import FavoriteLongshotBias
+        mods["flb"] = FavoriteLongshotBias
+    except Exception as e:
+        print(f"[v3] FLB not loaded: {e}")
+    try:
+        from models.calibration import CalibrationAnalyzer
+        mods["cal"] = CalibrationAnalyzer
+    except Exception as e:
+        print(f"[v3] Calibration not loaded: {e}")
+    try:
+        from risk.expiry_gamma import ExpiryGamma
+        mods["gamma"] = ExpiryGamma
+    except Exception as e:
+        print(f"[v3] ExpiryGamma not loaded: {e}")
+    try:
+        from risk.transaction_cost import TransactionCostModel
+        mods["tc"] = TransactionCostModel
+    except Exception as e:
+        print(f"[v3] TransactionCost not loaded: {e}")
+    try:
+        from data.wash_filter import WashFilter
+        mods["wash"] = WashFilter
+    except Exception as e:
+        print(f"[v3] WashFilter not loaded: {e}")
+    return mods
+
+
+def run_v3_analysis(trades: pd.DataFrame, wf: pd.DataFrame,
+                    mods: dict) -> dict:
+    """
+    Run all Simons + Academic Alpha analysis on completed trades.
+    Returns v3_data dict with all module results.
+    """
+    v3 = {}
+
+    # ── HMM Regime analysis ────────────────────────────────────────────────────
+    if "hmm" in mods and not trades.empty:
+        print("[v3] Fitting HMM regimes...")
+        try:
+            reg = mods["hmm"]()
+            reg.fit_all(wf)
+            # Annotate trades with HMM regime
+            trades_hmm = reg.annotate_wf(trades)
+            regime_stats = {}
+            if "hmm_regime" in trades_hmm.columns:
+                for regime, g in trades_hmm.groupby("hmm_regime"):
+                    if len(g) >= 5:
+                        pnl = g["pnl"]
+                        s = round(pnl.mean() / pnl.std() * np.sqrt(252), 4) \
+                            if pnl.std() > 0 else 0.0
+                        regime_stats[str(regime)] = {
+                            "n_trades": len(g),
+                            "sharpe":   s,
+                            "win_rate": round(g["win"].mean(), 4),
+                            "total_pnl": round(pnl.sum(), 4),
+                            "kelly_mult": g["hmm_kelly_mult"].mean() if "hmm_kelly_mult" in g.columns else 1.0,
+                        }
+                        print(f"  HMM {regime:<18} n={len(g):>6} | sharpe={s:+.2f} | "
+                              f"win={g['win'].mean():.1%}")
+            v3["hmm_regime_stats"] = regime_stats
+            v3["hmm_registry"]     = reg
+        except Exception as e:
+            print(f"  [v3] HMM analysis failed: {e}")
+
+    # ── Favorite-Longshot Bias ─────────────────────────────────────────────────
+    if "flb" in mods and not trades.empty:
+        print("[v3] Computing Favorite-Longshot Bias...")
+        try:
+            flb = mods["flb"]()
+            flb.fit(trades)
+            tbl = flb.summary_table()
+            v3["flb_table"] = tbl
+            v3["flb"] = flb
+            # Compute how much alpha is from FL bias
+            if not tbl.empty:
+                underpriced = tbl[tbl["bias"] < -0.05]
+                overpriced  = tbl[tbl["bias"] > 0.05]
+                print(f"  Underpriced buckets (opportunity): {len(underpriced)}")
+                print(f"  Overpriced buckets (avoid long):   {len(overpriced)}")
+        except Exception as e:
+            print(f"  [v3] FLB analysis failed: {e}")
+
+    # ── Calibration ────────────────────────────────────────────────────────────
+    if "cal" in mods and not wf.empty:
+        print("[v3] Computing calibration metrics...")
+        try:
+            # Use cached if available, else fit
+            cal_path = Path("data/processed/calibration_cache.json")
+            if cal_path.exists():
+                ca = mods["cal"].load(cal_path)
+                # Re-fit if cache seems stale (no category_brier)
+                if not ca.category_brier:
+                    ca.fit(wf)
+            else:
+                ca = mods["cal"]()
+                ca.fit(wf)
+            v3["calibration"] = ca
+            print(f"  Global Brier Score: {ca.global_brier_score:.5f}")
+            miscal_cats = [c for c, bs in ca.category_brier.items()
+                           if bs > 0.20]
+            if miscal_cats:
+                print(f"  Miscalibrated categories (BS>0.20): {miscal_cats}")
+        except Exception as e:
+            print(f"  [v3] Calibration analysis failed: {e}")
+
+    # ── Gamma Near Expiry ──────────────────────────────────────────────────────
+    if "gamma" in mods and not trades.empty:
+        print("[v3] Computing gamma/expiry sizing...")
+        try:
+            eg = mods["gamma"]()
+            trades_gamma = eg.annotate(trades)
+            # V3 gamma-adjusted P&L
+            if "gamma_mult" in trades_gamma.columns:
+                gamma_pnl = trades_gamma["pnl"] * trades_gamma["gamma_mult"]
+                gamma_sharpe = (gamma_pnl.mean() / gamma_pnl.std() * np.sqrt(252)
+                                if gamma_pnl.std() > 0 else 0.0)
+                v3["gamma_sharpe"] = round(gamma_sharpe, 4)
+                v3["gamma_avg_mult"] = round(trades_gamma["gamma_mult"].mean(), 4)
+                bucket_counts = trades_gamma["gamma_bucket"].value_counts().to_dict()
+                v3["gamma_buckets"] = bucket_counts
+                print(f"  Gamma avg mult: {v3['gamma_avg_mult']:.4f} | "
+                      f"Gamma-adj Sharpe: {gamma_sharpe:.4f}")
+                print(f"  Buckets: {bucket_counts}")
+        except Exception as e:
+            print(f"  [v3] Gamma analysis failed: {e}")
+
+    # ── Transaction Cost Impact ────────────────────────────────────────────────
+    if "tc" in mods and not trades.empty:
+        print("[v3] Computing transaction cost impact...")
+        try:
+            tc = mods["tc"]()
+            trades_tc = tc.annotate_trades(trades)
+            if "tc_total" in trades_tc.columns:
+                tc_pnl = trades_tc["pnl"] - trades_tc["tc_total"]
+                tc_sharpe = (tc_pnl.mean() / tc_pnl.std() * np.sqrt(252)
+                             if tc_pnl.std() > 0 else 0.0)
+                viable_pct = trades_tc["tc_viable"].mean()
+                v3["tc_sharpe"]     = round(tc_sharpe, 4)
+                v3["tc_viable_pct"] = round(viable_pct, 4)
+                v3["tc_avg_cost"]   = round(trades_tc["tc_total"].mean(), 5)
+                print(f"  TC-adj Sharpe: {tc_sharpe:.4f} | Viable: {viable_pct:.1%} | "
+                      f"Avg cost: {v3['tc_avg_cost']:.5f}")
+        except Exception as e:
+            print(f"  [v3] Transaction cost analysis failed: {e}")
+
+    # ── Wash Filter Impact ─────────────────────────────────────────────────────
+    if "wash" in mods and not trades.empty:
+        print("[v3] Applying wash trading filter...")
+        try:
+            wf_filter = mods["wash"]()
+            scored = wf_filter.heuristic_wash_score(trades)
+            n_flagged = scored["wash_flag"].sum()
+            v3["wash_flagged"] = int(n_flagged)
+            v3["wash_pct"]     = round(n_flagged / max(len(trades), 1), 4)
+            clean_trades = scored[~scored["wash_flag"]]
+            if len(clean_trades) >= 20:
+                pnl = clean_trades["pnl"]
+                wash_sharpe = (pnl.mean() / pnl.std() * np.sqrt(252)
+                               if pnl.std() > 0 else 0.0)
+                v3["wash_clean_sharpe"] = round(wash_sharpe, 4)
+                print(f"  Wash-flagged: {n_flagged:,} ({v3['wash_pct']:.1%}) | "
+                      f"Clean Sharpe: {wash_sharpe:.4f}")
+        except Exception as e:
+            print(f"  [v3] Wash filter failed: {e}")
+
+    return v3
+
+
 def run() -> None:
     results   = {}
     trades_dict = {}
+    v3_data: dict = {}
+
+    # Load Simons modules once
+    simons_mods = _load_simons_modules()
+    print(f"[v3] Modules loaded: {list(simons_mods.keys())}")
 
     # ── General clean model ───────────────────────────────────────────────────
     gen_path = PROC_DIR / "wf_clean_general.parquet"
@@ -497,7 +884,11 @@ def run() -> None:
         print(f"\n[CleanBacktest] General WF: {len(wf_gen):,} rows")
         print(f"  Columns: {list(wf_gen.columns)}")
 
-        cmp, trades_clean = comparison_metrics(wf_gen, "pred_prob_clean")
+        # Attempt OHLCV fetch for true intramarket entry prices
+        ohlcv_dict = _try_fetch_ohlcv(wf_gen)
+
+        cmp, trades_clean = comparison_metrics(wf_gen, "pred_prob_clean",
+                                               ohlcv_dict=ohlcv_dict)
 
         # Bootstrap CI on clean returns
         if not trades_clean.empty:
@@ -532,7 +923,9 @@ def run() -> None:
         wf_wx = pd.read_parquet(wx_path)
         print(f"\n[CleanBacktest] Weather WF: {len(wf_wx):,} rows")
 
-        cmp_wx, trades_wx = comparison_metrics(wf_wx, "pred_prob_clean")
+        ohlcv_wx = _try_fetch_ohlcv(wf_wx)
+        cmp_wx, trades_wx = comparison_metrics(wf_wx, "pred_prob_clean",
+                                               ohlcv_dict=ohlcv_wx)
         clean_wx = cmp_wx.get("clean", {})
         orig_wx  = cmp_wx.get("original", {})
         print(f"\n[CleanBacktest] Weather CLEAN — Sharpe={clean_wx.get('sharpe',0):+.2f} | "
@@ -560,7 +953,14 @@ def run() -> None:
                 print(f"  {test:<35} n={m['n_trades']:>5} | sharpe={m['sharpe']:+.2f} | "
                       f"win={m['win_rate']:.1%} | pnl={m['total_pnl']:+.2f}")
 
-    generate_report(results, trades_dict, robustness_dict=robustness if robustness else None)
+    # ── v3 Simons + Academic Alpha Analysis ───────────────────────────────────
+    if gen_trades is not None and not gen_trades.empty and simons_mods:
+        print("\n[v3] ═══ SIMONS + ACADEMIC ALPHA ANALYSIS ═══════════════════════")
+        _v3_wf  = gen_wf if gen_wf is not None else wf_gen
+        v3_data = run_v3_analysis(gen_trades, _v3_wf, simons_mods)
+
+    generate_report(results, trades_dict, robustness_dict=robustness if robustness else None,
+                    v3_data=v3_data)
 
 
 if __name__ == "__main__":

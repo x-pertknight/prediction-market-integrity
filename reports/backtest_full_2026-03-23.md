@@ -6,7 +6,7 @@
 
 | Model | Trades | Win Rate | Total P&L | Sharpe | MaxDD | Avg MAE | Avg MFE |
 |---|---|---|---|---|---|---|---|
-| Weather v2 | 284 | 6.7% | +11.96 | +2.74 | -1.44 | 0.0210 | 0.0631 |
+| Weather v2 | 140 | 7.1% | +7.90 | +3.59 | -0.44 | 0.0114 | 0.0678 |
 | Crypto v1 | 72047 | 13.8% | +7855.52 | +5.23 | -12.40 | 0.0190 | 0.1280 |
 | General v1 | 26936 | 27.8% | +5363.92 | +7.35 | -49.87 | 0.0450 | 0.2441 |
 | Ensemble | 3688 | 27.0% | +813.77 | +7.93 | -2.38 | 0.0333 | 0.2540 |
@@ -18,28 +18,28 @@
 
 | Metric | Value |
 |---|---|
-| n_trades | 284 |
-| win_rate | 0.0669 |
-| total_pnl | 11.96 |
-| mean_pnl | 0.0421 |
-| sharpe_abs | 2.7414 |
-| mean_roi | 3.3533 |
-| sharpe_roi | 2.7141 |
-| max_drawdown | -1.44 |
-| avg_entry | 0.0248 |
-| mean_mae | 0.021 |
-| mean_mfe | 0.0631 |
+| n_trades | 140 |
+| win_rate | 0.0714 |
+| total_pnl | 7.9 |
+| mean_pnl | 0.0564 |
+| sharpe_abs | 3.5945 |
+| mean_roi | 3.803 |
+| sharpe_roi | 2.9192 |
+| max_drawdown | -0.44 |
+| avg_entry | 0.015 |
+| mean_mae | 0.0114 |
+| mean_mfe | 0.0678 |
 
 ### Breakdown by Category
 
 | Group | Trades | Win Rate | P&L | Sharpe | MaxDD |
 |---|---|---|---|---|---|
-| Atlanta | 5 | 0% | -0.13 | -18.84 | -0.08 |
-| Chicago | 76 | 7% | +3.17 | +2.63 | -0.42 |
+| Atlanta | 4 | 0% | -0.08 | -15.87 | -0.07 |
+| Chicago | 35 | 3% | +0.52 | +1.39 | -0.27 |
 | Dallas | 2 | 50% | +0.98 | +11.00 | +0.00 |
-| Miami | 76 | 4% | +1.73 | +1.83 | -0.38 |
-| NYC | 100 | 3% | +0.22 | +0.21 | -0.99 |
-| Seattle | 25 | 28% | +5.99 | +8.87 | -0.99 |
+| Miami | 45 | 2% | +0.54 | +1.28 | -0.97 |
+| NYC | 32 | 3% | +0.56 | +1.74 | -0.25 |
+| Seattle | 22 | 27% | +5.38 | +8.89 | -0.13 |
 
 ---
 ## Crypto v1
