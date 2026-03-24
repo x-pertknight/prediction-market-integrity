@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from risk.circuit_breaker import (
     CircuitBreaker, ROLLING_WINDOW, MIN_ROLLING_SHARPE,
-    MAX_CONSECUTIVE_LOSSES, SIZING_FULL, SIZING_REDUCED,
+    SIZING_FULL, SIZING_REDUCED, DRAWDOWN_HALT_PCT,
 )
 from risk.market_impact import (
     liquidity_tier, market_impact, should_trade, kelly_multiplier,
@@ -20,7 +20,7 @@ from risk.market_impact import (
 )
 
 
-# ── Circuit Breaker ──────────────────────────────────────────────────────────
+# ── Circuit Breaker (calibrated for 19% win rate) ──────────────────────────
 
 class TestCircuitBreaker:
     def test_initial_state_allowed(self):
@@ -30,32 +30,36 @@ class TestCircuitBreaker:
         assert result["allowed"] is True
         assert result["sizing_mult"] == SIZING_FULL
 
-    def test_three_consecutive_losses_halt(self):
-        """3 consecutive losses trigger halt."""
-        cb = CircuitBreaker()
-        cb.record_trade(-0.01)
-        cb.record_trade(-0.02)
-        assert cb.check()["allowed"] is True  # only 2 losses
-        cb.record_trade(-0.01)  # 3rd loss
-        assert cb.check()["allowed"] is False
-        assert "consecutive" in cb.halt_reason.lower()
+    def test_no_halt_on_short_loss_streaks(self):
+        """With 19% win rate, 10 consecutive losses is normal. Must not halt."""
+        cb = CircuitBreaker(initial_capital=100.0)
+        for _ in range(10):
+            cb.record_trade(-0.05)
+        # 10 losses of $0.05 = $0.50 drawdown = 0.5% of $100
+        # Well below 15% drawdown threshold
+        assert cb.check()["allowed"] is True
 
-    def test_win_resets_consecutive_losses(self):
-        """A winning trade resets the consecutive loss counter."""
-        cb = CircuitBreaker()
-        cb.record_trade(-0.01)
-        cb.record_trade(-0.01)
-        cb.record_trade(0.10)  # win
-        cb.record_trade(-0.01)
-        cb.record_trade(-0.01)
-        # Only 2 consecutive losses (after the win), should still be allowed
+    def test_drawdown_halt(self):
+        """Large drawdown (>15%) triggers halt."""
+        cb = CircuitBreaker(initial_capital=100.0)
+        # Lose $16 = 16% drawdown
+        cb.record_trade(-16.0)
+        assert cb.check()["allowed"] is False
+        assert "drawdown" in cb.halt_reason.lower()
+
+    def test_win_after_losses_no_halt(self):
+        """A winning trade does not trigger halt even after many losses."""
+        cb = CircuitBreaker(initial_capital=100.0)
+        for _ in range(15):
+            cb.record_trade(-0.05)
+        cb.record_trade(0.10)
+        # Total P&L: -0.75 + 0.10 = -0.65, drawdown 0.65%
         assert cb.check()["allowed"] is True
 
     def test_manual_reset(self):
         """Manual reset clears halt state."""
-        cb = CircuitBreaker()
-        for _ in range(MAX_CONSECUTIVE_LOSSES):
-            cb.record_trade(-0.01)
+        cb = CircuitBreaker(initial_capital=100.0)
+        cb.record_trade(-20.0)  # 20% drawdown
         assert cb.check()["allowed"] is False
         cb.reset()
         assert cb.check()["allowed"] is True
@@ -74,20 +78,50 @@ class TestCircuitBreaker:
         summary = cb.status_summary()
         expected_keys = {
             "halted", "halt_reason", "sizing_mult", "total_trades",
-            "consecutive_losses", "rolling_sharpe_30", "total_pnl",
+            "equity", "peak_equity", "drawdown_pct", "rolling_sharpe",
+            "total_pnl",
         }
         assert set(summary.keys()) == expected_keys
         assert summary["total_trades"] == 1
         assert summary["total_pnl"] == 0.05
 
     def test_rolling_sharpe_halt(self):
-        """Rolling Sharpe below threshold triggers halt after enough trades."""
-        cb = CircuitBreaker()
-        # Feed 30 trades with negative mean (low Sharpe)
+        """Rolling Sharpe below 0 triggers halt after enough trades."""
+        cb = CircuitBreaker(initial_capital=1000.0)  # high capital to avoid DD halt
         rng = np.random.default_rng(42)
         for _ in range(ROLLING_WINDOW):
             cb.record_trade(rng.normal(-0.05, 0.01))
         assert cb.check()["allowed"] is False
+
+    def test_peak_equity_tracking(self):
+        """Peak equity updates correctly."""
+        cb = CircuitBreaker(initial_capital=100.0)
+        cb.record_trade(10.0)
+        assert cb._peak_equity == 110.0
+        cb.record_trade(-5.0)
+        assert cb._peak_equity == 110.0  # stays at peak
+        cb.record_trade(10.0)
+        assert cb._peak_equity == 115.0
+
+    def test_19pct_winrate_realistic_simulation(self):
+        """Simulate realistic 19% WR trading — must not halt on normal streaks."""
+        rng = np.random.default_rng(123)
+        cb = CircuitBreaker(initial_capital=100.0)
+        n_trades = 50
+        halted_early = False
+        for i in range(n_trades):
+            if rng.random() < 0.19:
+                # Win: gain is ~4x the loss (to make strategy profitable)
+                cb.record_trade(0.30)
+            else:
+                cb.record_trade(-0.05)
+            if cb.halted and i < 40:
+                halted_early = True
+                break
+        # Should NOT halt during normal trading with 19% WR
+        assert not halted_early, (
+            f"Circuit breaker halted too early at trade {i}: {cb.halt_reason}"
+        )
 
 
 # ── Market Impact ────────────────────────────────────────────────────────────
@@ -114,11 +148,11 @@ class TestLiquidityTier:
 
 class TestMarketImpact:
     def test_zero_volume(self):
-        """Zero volume → max impact of 1.0."""
+        """Zero volume -> max impact of 1.0."""
         assert market_impact(1.0, 0.0) == 1.0
 
     def test_large_volume_low_impact(self):
-        """High volume → low impact."""
+        """High volume -> low impact."""
         impact = market_impact(1.0, 1_000_000)
         assert impact < 0.001
 
@@ -140,7 +174,7 @@ class TestShouldTrade:
         assert should_trade(1.0, 50.0) is False
 
     def test_too_large_rejected(self):
-        """Position > 10% of daily volume → reject."""
+        """Position > 10% of daily volume -> reject."""
         assert should_trade(600.0, 1000.0) is False
 
     def test_normal_trade_allowed(self):
