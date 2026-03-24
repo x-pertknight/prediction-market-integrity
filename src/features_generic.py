@@ -95,23 +95,60 @@ def build_generic_features(df: pd.DataFrame) -> pd.DataFrame:
         .transform(lambda x: x.expanding().mean().shift(1))
     ).clip(0, 5).fillna(1.0)
 
-    # volume_rank per series (expanding percentile, shift to avoid leakage)
-    df["volume_rank"] = (
-        df.groupby("series_ticker")["volume_fp"]
+    # volume_rank per series (date-level to avoid same-day leakage)
+    # Aggregate volume by (series, date), compute expanding rank on PRIOR dates only
+    _vr_agg = (df.groupby(["series_ticker", "close_date"])["volume_fp"]
+               .mean().reset_index(name="vol_date_mean"))
+    _vr_agg = _vr_agg.sort_values(["series_ticker", "close_date"])
+    _vr_agg["volume_rank"] = (
+        _vr_agg.groupby("series_ticker")["vol_date_mean"]
         .transform(lambda x: x.shift(1).expanding().rank(pct=True))
     ).fillna(0.5)
+    df = df.merge(_vr_agg[["series_ticker", "close_date", "volume_rank"]],
+                  on=["series_ticker", "close_date"], how="left",
+                  suffixes=("_old", ""))
+    if "volume_rank_old" in df.columns:
+        df = df.drop(columns=["volume_rank_old"])
 
-    # price_lag1 per series
-    df["price_lag1"] = (
-        df.groupby("series_ticker")["market_price"]
+    # price_lag1 per series — use last close_date's price, not shift(1) by row
+    # This avoids same-day ordering issues: all markets closing on the same date
+    # get the same price_lag1 (the price from the previous DATE in the series)
+    _pl_agg = (df.groupby(["series_ticker", "close_date"])["market_price"]
+               .mean().reset_index(name="price_date_mean"))
+    _pl_agg = _pl_agg.sort_values(["series_ticker", "close_date"])
+    _pl_agg["price_lag1"] = (
+        _pl_agg.groupby("series_ticker")["price_date_mean"]
         .transform(lambda x: x.shift(1))
-    ).fillna(df["market_price"])
+    )
+    df = df.merge(_pl_agg[["series_ticker", "close_date", "price_lag1"]],
+                  on=["series_ticker", "close_date"], how="left",
+                  suffixes=("_old", ""))
+    if "price_lag1_old" in df.columns:
+        df = df.drop(columns=["price_lag1_old"])
+    df["price_lag1"] = df["price_lag1"].fillna(df["market_price"])
 
-    # hist_win_rate per series (expanding, no leakage)
-    df["hist_win_rate_series"] = (
-        df.groupby("series_ticker")["outcome"]
-        .transform(lambda x: x.shift(1).expanding().mean())
+    # hist_win_rate per series — DATE-LEVEL aggregation to prevent same-day leakage
+    # All markets closing on the same date see the same hist_win_rate:
+    # the mean outcome of all markets in the series that closed on PRIOR dates.
+    _hw_agg = (df.groupby(["series_ticker", "close_date"])["outcome"]
+               .agg(["sum", "count"]).reset_index())
+    _hw_agg = _hw_agg.sort_values(["series_ticker", "close_date"])
+    _hw_agg["prior_sum"] = (
+        _hw_agg.groupby("series_ticker")["sum"]
+        .transform(lambda x: x.cumsum().shift(1))
+    )
+    _hw_agg["prior_count"] = (
+        _hw_agg.groupby("series_ticker")["count"]
+        .transform(lambda x: x.cumsum().shift(1))
+    )
+    _hw_agg["hist_win_rate_series"] = (
+        _hw_agg["prior_sum"] / _hw_agg["prior_count"]
     ).fillna(0.5)
+    df = df.merge(_hw_agg[["series_ticker", "close_date", "hist_win_rate_series"]],
+                  on=["series_ticker", "close_date"], how="left",
+                  suffixes=("_old", ""))
+    if "hist_win_rate_series_old" in df.columns:
+        df = df.drop(columns=["hist_win_rate_series_old"])
 
     # category encoding
     if not CATEGORY_MAP:
