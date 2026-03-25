@@ -40,6 +40,18 @@ except ImportError:
 from risk.fees import kalshi_taker_fee, polymarket_taker_fee
 from risk.market_impact import market_impact, should_trade, liquidity_tier
 from risk.circuit_breaker import CircuitBreaker
+from alerts.telegram_bot import (
+    alert_entry_signal, alert_exit_signal, alert_circuit_breaker,
+    alert_daily_summary, set_paper_trader, start_command_listener,
+    start_daily_summary,
+)
+from data.polymarket_feature_adapter import (
+    build_features as adapter_build_features,
+    infer_category,
+    market_passes_filter,
+    diagnose_features,
+    MODEL_FEATURES,
+)
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
@@ -105,50 +117,17 @@ _TAG_TO_CAT = {
 }
 
 
-def _build_features(market: dict, macro: dict) -> np.ndarray:
-    """Build feature vector for a Polymarket market."""
-    today = date.today()
-    doy = today.timetuple().tm_yday
+def _build_features(market: dict, macro: dict,
+                    all_markets: list[dict] | None = None) -> np.ndarray:
+    """Build feature vector using the Polymarket adapter.
 
-    # Map Polymarket tags to category
-    tags = [t.lower() for t in (market.get("tags") or [])]
-    cat = "Crypto"  # default
-    for tag in tags:
-        if tag in _TAG_TO_CAT:
-            cat = _TAG_TO_CAT[tag]
-            break
-
-    vals = {
-        "days_in_market":          1,
-        "floor_strike_pct":        1.0,
-        "market_type_enc":         0,
-        "category_enc":            _CAT_ENC.get(cat, -1),
-        "day_of_week":             today.weekday(),
-        "month":                   today.month,
-        "day_of_year":             doy,
-        "doy_sin":                 np.sin(2 * np.pi * doy / 365),
-        "doy_cos":                 np.cos(2 * np.pi * doy / 365),
-        "hist_win_rate_series":    0.5,
-        "volume_rank":             0.5,
-        "fear_greed_value":        macro.get("fear_greed_value", 50.0),
-        "btc_ret_1d":              macro.get("btc_ret_1d", 0.0),
-        "btc_ret_7d":              macro.get("btc_ret_7d", 0.0),
-        "btc_vol_20d":             macro.get("btc_vol_20d", 0.0),
-        "btc_zscore_30":           macro.get("btc_zscore_30", 0.0),
-        "dxy_proxy":               macro.get("dxy_proxy", 0.0),
-        "fed_funds_rate":          macro.get("fed_funds_rate", 0.0),
-        "yield_10y":               macro.get("yield_10y", 0.0),
-        "btc_funding_rate":        macro.get("btc_funding_rate", 0.0),
-        "btc_open_interest":       macro.get("btc_open_interest", 0.0),
-        "news_count_crypto":       macro.get("news_count_crypto", 0),
-        "news_count_weather":      macro.get("news_count_weather", 0),
-        "news_count_macro":        macro.get("news_count_macro", 0),
-        "news_count_politics":     macro.get("news_count_politics", 0),
-        "news_count_sports":       macro.get("news_count_sports", 0),
-        "smart_money_index":       macro.get("smart_money_index", 50.0),
-        "whale_cluster_detected":  macro.get("whale_cluster_detected", 0),
-    }
-    return np.array([vals.get(f, 0) for f in CLEAN_FEATURES]).reshape(1, -1)
+    Delegates to polymarket_feature_adapter.build_features() which handles:
+    - Keyword-based category inference (Gamma API has no tags/category)
+    - Training-set medians for unmappable features
+    - Proper days_in_market from startDate
+    - Cross-sectional volume_rank from all current markets
+    """
+    return adapter_build_features(market, macro, all_markets)
 
 
 def _load_macro() -> dict:
@@ -272,16 +251,25 @@ class PaperTrader:
         log.error("No trained RF model found in models/")
         return None
 
-    def _score_market(self, market: dict) -> float | None:
+    def _score_market(self, market: dict,
+                      all_markets: list[dict] | None = None) -> float | None:
         """Score a market with the RF model. Returns predicted probability."""
         if self.model is None:
             return None
         try:
-            X = _build_features(market, self.macro)
+            X = _build_features(market, self.macro, all_markets)
+            # Check for NaN in feature vector
+            if np.isnan(X).any():
+                nan_feats = [MODEL_FEATURES[i] for i in range(X.shape[1])
+                             if np.isnan(X[0, i])]
+                log.warning(f"NaN features for {market.get('question', '?')[:40]}: "
+                            f"{nan_feats}")
+                # Replace NaN with 0 to avoid model crash
+                X = np.nan_to_num(X, nan=0.0)
             prob = self.model.predict_proba(X)[0][1]
             return float(prob)
         except Exception as e:
-            log.debug(f"Scoring failed for {market.get('question', '?')[:40]}: {e}")
+            log.warning(f"Scoring failed for {market.get('question', '?')[:40]}: {e}")
             return None
 
     def _compute_fee(self, price: float, market: dict) -> float:
@@ -311,17 +299,22 @@ class PaperTrader:
         # Refresh macro periodically
         self.macro = _load_macro()
 
+        scored = 0
+        skipped_cat = 0
+        skipped_price = 0
+
         for m in markets:
             market_id = m.get("id") or m.get("condition_id") or ""
             question = (m.get("question") or "")[:80]
-            tags = _market_tags(m)
 
-            # Filter by target categories
-            if not tags & TARGET_CATS:
+            # Filter by inferred category (keyword-based, not tag-based)
+            if not market_passes_filter(m, TARGET_CATS):
+                skipped_cat += 1
                 continue
 
             price = _market_price(m)
             if price <= 0 or price >= 0.95:
+                skipped_price += 1
                 continue
 
             volume = float(m.get("volume", 0) or 0)
@@ -346,19 +339,23 @@ class PaperTrader:
                     self._paper_sell(market_id, price, m)
                 continue
 
-            # Score with model
-            prob = self._score_market(m)
+            # Score with model (pass all markets for volume_rank)
+            prob = self._score_market(m, markets)
             if prob is None:
                 continue
+            scored += 1
 
             # Entry signal: price <= model_prob * EDGE_MULT
             if price > prob * EDGE_MULT:
+                log.debug(f"No edge: {question[:40]} price={price:.3f} "
+                          f"prob={prob:.3f} threshold={prob*EDGE_MULT:.3f}")
                 continue
 
             # Circuit breaker check
             cb_status = self.cb.check()
             if not cb_status["allowed"]:
                 log.warning(f"CIRCUIT BREAKER: {cb_status['reason']}")
+                alert_circuit_breaker(cb_status["reason"])
                 continue
 
             # Volume/liquidity check
@@ -367,6 +364,9 @@ class PaperTrader:
                 continue
 
             self._paper_buy(market_id, question, price, prob, m)
+
+        log.info(f"Scan: {len(markets)} fetched | {skipped_cat} filtered(cat) | "
+                 f"{skipped_price} filtered(price) | {scored} scored")
 
     def _paper_buy(self, market_id: str, question: str, price: float,
                    model_prob: float, market: dict) -> None:
@@ -405,6 +405,15 @@ class PaperTrader:
         log.info(f"PAPER_BUY  {question[:50]} | price={price:.3f} "
                  f"prob={model_prob:.3f} edge={model_prob/price:.1f}x fee={fee:.4f}")
 
+        # Telegram alert
+        tags = _market_tags(market)
+        cat = next((t for t in tags if t in TARGET_CATS), "unknown")
+        alert_entry_signal(
+            market=question, category=cat,
+            model_prob=model_prob, market_price=price,
+            kelly_size=0, convexity=model_prob - price,
+        )
+
     def _paper_sell(self, market_id: str, exit_price: float, market: dict) -> None:
         """Log a paper SELL."""
         pos = self.positions.pop(market_id, None)
@@ -439,8 +448,21 @@ class PaperTrader:
         log.info(f"PAPER_SELL {pos.question[:50]} | {tag} pnl={pnl_net:+.4f} "
                  f"cum={self.cumulative_pnl:+.4f}")
 
+        # Telegram alert
+        alert_exit_signal(
+            market=pos.question, entry_price=pos.entry_price,
+            exit_price=exit_price, pnl=pnl_net,
+            reason="exit_signal" if exit_price >= pos.model_prob * EXIT_MULT else "expiry",
+        )
+
     def run(self) -> None:
         """Main polling loop."""
+        # Start Telegram bot threads
+        set_paper_trader(self)
+        start_command_listener()
+        start_daily_summary()
+        log.info("Telegram bot started — commands: /status /trades /stop")
+
         log.info(f"Paper trader started | poll={POLL_INTERVAL}s | "
                  f"edge={EDGE_MULT} | fee_model={FEE_MODEL}")
         while self._running:
