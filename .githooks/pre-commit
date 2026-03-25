@@ -1,0 +1,10 @@
+#!/bin/bash
+# Pre-commit hook: run tests before every commit
+source .venv/bin/activate 2>/dev/null
+python -m pytest tests/ -v --tb=short -q
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ Tests failed. Commit aborted."
+    echo "Fix failing tests before committing."
+    exit 1
+fi

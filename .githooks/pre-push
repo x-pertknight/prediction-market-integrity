@@ -1,0 +1,10 @@
+#!/bin/bash
+# Pre-push hook: run full test suite + coverage before push
+source .venv/bin/activate 2>/dev/null
+python -m pytest tests/ -v --cov=src --cov-report=term --cov-fail-under=70
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ Tests or coverage check failed. Push aborted."
+    echo "Ensure all tests pass and coverage >= 70%."
+    exit 1
+fi
