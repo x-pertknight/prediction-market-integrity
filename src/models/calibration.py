@@ -187,6 +187,15 @@ class CalibrationAnalyzer:
             return SIZING_REDUCTION_MISCAL  # 0.5× for miscalibrated category
         return 1.0
 
+    def confidence_score(self, raw_prob: float,
+                         category: str | None = None) -> float:
+        """Return calibration-adjusted confidence score in [0.0, 1.0].
+
+        Applies calibration offset to correct model overconfidence/underconfidence.
+        Used by CalibrationSignalProvider in the alpha combination framework.
+        """
+        return float(np.clip(self.adjusted_prob(raw_prob, category), 0.0, 1.0))
+
     def annotate(self, df: pd.DataFrame,
                  prob_col: str = "pred_prob_clean",
                  category_col: str = "category") -> pd.DataFrame:
