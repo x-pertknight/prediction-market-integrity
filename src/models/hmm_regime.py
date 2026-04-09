@@ -188,6 +188,21 @@ class HMMRegimeDetector:
         """Return Kelly size multiplier for a given regime."""
         return KELLY_MULTS.get(regime, 1.0)
 
+    def confidence_score(self, returns: pd.Series | np.ndarray) -> float:
+        """Return continuous confidence score 0.0-1.0 based on current regime.
+
+        MEAN_REVERTING -> 0.7 (favorable for mean-reversion strategy)
+        TRENDING       -> 0.5 (neutral)
+        VOLATILE       -> 0.2 (unfavorable)
+        """
+        regime = self.predict_current(returns)
+        _REGIME_CONFIDENCE = {
+            "MEAN_REVERTING": 0.7,
+            "TRENDING": 0.5,
+            "VOLATILE": 0.2,
+        }
+        return _REGIME_CONFIDENCE.get(regime, 0.5)
+
     def save(self, path: Path) -> None:
         joblib.dump({"model": self.model, "state_map": self.state_map,
                      "fitted": self.fitted}, path)
