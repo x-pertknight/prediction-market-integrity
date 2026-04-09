@@ -63,6 +63,7 @@ from alpha.combinator import (
     CrossVenueSignalProvider, MomentumSignalProvider,
     CalibrationSignalProvider,
 )
+from alpha.cross_platform_arb import CrossPlatformArb
 from models.calibration import CalibrationAnalyzer
 from risk.kelly import kelly_with_cv
 
@@ -384,6 +385,7 @@ class PaperTrader:
         # Init library client so adapter can make authenticated prod API calls
         _init_library_client()
         # Alpha combination framework
+        self.arb = CrossPlatformArb()
         self.combinator = AlphaCombinator(window=200)
         self.rf_signal = RFSignalProvider(self.model)
         self.hmm_signal = HMMSignalProvider(self._load_hmm())
@@ -470,6 +472,24 @@ class PaperTrader:
         # Refresh macro periodically
         self.macro = _load_macro()
 
+        # Build returns series from circuit breaker trade history (for HMM signal)
+        returns_series = (
+            pd.Series([t["pnl"] for t in self.cb.trades])
+            if self.cb.trades else None
+        )
+
+        # Fetch cross-venue prices from Kalshi demo API (for cross-venue signal)
+        try:
+            kalshi_df = self.arb.scan_live_kalshi(limit=200)
+            cross_venue_prices = [
+                {"title": row["title"], "price": float(row["yes_price"])}
+                for _, row in kalshi_df.iterrows()
+                if float(row.get("yes_price", 0)) > 0
+            ]
+        except Exception as e:
+            log.warning(f"Cross-venue fetch failed: {e}")
+            cross_venue_prices = []
+
         scored = 0
         skipped_cat = 0
         skipped_price = 0
@@ -517,13 +537,13 @@ class PaperTrader:
             scored += 1
 
             # Collect signals from all providers
-            # TODO: wire context["returns"] from daily PnL series for HMM signal
-            # TODO: wire context["cross_venue_prices"] for cross-venue signal
             context = {
                 "features": X,
                 "model_prob": prob,
                 "macro": self.macro,
                 "all_markets": markets,
+                "returns": returns_series,
+                "cross_venue_prices": cross_venue_prices,
             }
             signals = {}
             for provider in self.signal_providers:
