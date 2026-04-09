@@ -54,6 +54,56 @@ def expected_value(win_prob: float, entry_price: float) -> float:
     return win_prob * (1.0 - entry_price) - (1.0 - win_prob) * entry_price
 
 
+def kelly_with_cv(
+    win_prob:    float,
+    entry_price: float,
+    n_paths:     int = 10_000,
+    n_trades:    int = 100,
+    rng_seed:    int = 42,
+) -> tuple[float, float]:
+    """
+    Empirical Kelly with coefficient-of-variation adjustment.
+
+    f_empirical = f_kelly x (1 - CV_edge)
+
+    CV_edge = std(edge) / mean(edge) from Monte Carlo simulation.
+    When edge is uncertain (high CV), sizing is reduced conservatively.
+
+    Args:
+        win_prob: model probability of YES outcome
+        entry_price: price paid per share (0-1)
+        n_paths: Monte Carlo simulation paths
+        n_trades: trades per path
+        rng_seed: random seed for reproducibility
+
+    Returns:
+        (f_empirical, cv_edge) tuple
+    """
+    f_kelly = quarter_kelly(win_prob, entry_price)
+    if f_kelly <= 0:
+        return 0.0, 0.0
+
+    rng = np.random.default_rng(rng_seed)
+
+    # Simulate outcome distributions across paths
+    outcomes = rng.binomial(1, win_prob, (n_paths, n_trades))
+    win_rates = outcomes.mean(axis=1)
+
+    # Edge per path: E[payoff] = wr * (1-price) - (1-wr) * price
+    edges = win_rates * (1.0 - entry_price) - (1.0 - win_rates) * entry_price
+
+    mean_edge = edges.mean()
+    std_edge = edges.std()
+
+    if abs(mean_edge) < 1e-10:
+        return 0.0, float("inf")
+
+    cv_edge = std_edge / abs(mean_edge)
+    f_empirical = f_kelly * max(0.0, 1.0 - cv_edge)
+
+    return f_empirical, cv_edge
+
+
 if __name__ == "__main__":
     # Example: model says 25% chance, market price is 10 cents
     prob   = 0.25
