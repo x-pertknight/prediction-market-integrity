@@ -409,21 +409,23 @@ class MomentumSignalProvider(SignalProvider):
     Positive momentum -> confidence > 0.5 (bullish).
     Negative momentum -> confidence < 0.5 (bearish).
     No history -> 0.5 (neutral).
-    Buffer persisted to data/momentum_history.json.
+    Delegates buffer management to MomentumTracker.
     """
 
-    BUFFER_PATH = Path("data/momentum_history.json")
-    MAX_HISTORY = 288   # 24h at 5-min intervals
     LOOKBACK = 12       # ~1 hour of 5-min ticks
 
     @property
     def name(self) -> str:
         return "momentum"
 
-    def __init__(self, buffer_path: Path | None = None):
-        self._path = buffer_path or self.BUFFER_PATH
-        self._buffer: dict[str, list[dict]] = {}
-        self._load_buffer()
+    def __init__(self, tracker=None, buffer_path: Path | None = None):
+        if tracker is not None:
+            self._tracker = tracker
+        else:
+            from data.momentum_tracker import MomentumTracker
+            self._tracker = MomentumTracker(
+                path=buffer_path or Path("data/momentum_history.json")
+            )
 
     def score(self, market: dict, context: dict) -> SignalResult:
         market_id = market.get("ticker", market.get("condition_id", ""))
@@ -434,33 +436,24 @@ class MomentumSignalProvider(SignalProvider):
         if not market_id:
             return SignalResult(name=self.name, confidence=0.5)
 
-        self._record_price(market_id, price, time.time())
+        self._tracker.record(market_id, price, time.time())
 
-        history = self._buffer.get(market_id, [])
-        if len(history) < 2:
+        hourly_slope = self._tracker.compute_momentum(
+            market_id, lookback=self.LOOKBACK,
+        )
+        if hourly_slope is None:
+            history = self._tracker.get_history(market_id)
             return SignalResult(
                 name=self.name, confidence=0.5,
                 metadata={"observations": len(history)},
             )
-
-        recent = history[-self.LOOKBACK:]
-        prices = [h["price"] for h in recent]
-        times = [h["ts"] for h in recent]
-
-        if len(prices) < 2 or (times[-1] - times[0]) < 60:
-            return SignalResult(
-                name=self.name, confidence=0.5,
-                metadata={"observations": len(history)},
-            )
-
-        # Linear regression slope
-        t = np.array(times) - times[0]
-        p = np.array(prices)
-        slope = float(np.polyfit(t, p, 1)[0])
-        hourly_slope = slope * 3600
 
         # Sigmoid mapping: positive slope -> confidence > 0.5
         confidence = 1.0 / (1.0 + np.exp(-hourly_slope / 0.01))
+
+        history = self._tracker.get_history(market_id)
+        recent = history[-self.LOOKBACK:]
+        prices = [h["price"] for h in recent]
 
         return SignalResult(
             name=self.name,
@@ -471,25 +464,6 @@ class MomentumSignalProvider(SignalProvider):
                 "price_range": float(max(prices) - min(prices)),
             },
         )
-
-    def _record_price(self, market_id: str, price: float, ts: float) -> None:
-        if market_id not in self._buffer:
-            self._buffer[market_id] = []
-        self._buffer[market_id].append({"price": price, "ts": ts})
-        if len(self._buffer[market_id]) > self.MAX_HISTORY:
-            self._buffer[market_id] = self._buffer[market_id][-self.MAX_HISTORY:]
-        self._save_buffer()
-
-    def _load_buffer(self) -> None:
-        if self._path.exists():
-            try:
-                self._buffer = json.loads(self._path.read_text())
-            except (json.JSONDecodeError, Exception):
-                self._buffer = {}
-
-    def _save_buffer(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(self._buffer))
 
 
 class CalibrationSignalProvider(SignalProvider):

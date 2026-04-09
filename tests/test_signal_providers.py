@@ -221,7 +221,7 @@ class TestMomentumSignalProvider:
             path.write_text(json.dumps(buffer))
             provider = MomentumSignalProvider(buffer_path=path)
             provider.score({"ticker": "TRIM-1", "last_price": 0.5}, {})
-            assert len(provider._buffer["TRIM-1"]) <= MomentumSignalProvider.MAX_HISTORY
+            assert len(provider._tracker.buffer["TRIM-1"]) <= provider._tracker.MAX_HISTORY
 
 
 # ── Calibration Signal Provider ──────────────────────────────────────────
