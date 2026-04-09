@@ -164,6 +164,19 @@ class CrossPlatformArb:
             "max_gap":        round(df["arb_gap"].abs().max(), 4),
         }
 
+    def confidence_score(self, own_price: float,
+                         other_price: float | None) -> float:
+        """Return confidence score based on cross-venue price agreement.
+
+        High confidence (near 1.0) when prices agree (low divergence).
+        Low confidence (near 0.0) when prices diverge > 10 cents.
+        Returns 0.5 (neutral) when no cross-venue match available.
+        """
+        if other_price is None:
+            return 0.5
+        divergence = abs(own_price - other_price)
+        return float(np.clip(1.0 - divergence / 0.10, 0.0, 1.0))
+
 
 def _mock_markets(n: int = 50) -> list[dict]:
     """Generate mock market data for testing."""
