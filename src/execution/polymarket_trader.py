@@ -58,6 +58,7 @@ from alpha.combinator import (
     CalibrationSignalProvider, OBISignalProvider, WhaleSignalProvider,
 )
 from alpha.cross_platform_arb import CrossPlatformArb
+from alpha.bayes_updater import bayesian_update_prob
 from models.calibration import CalibrationAnalyzer
 from risk.kelly import kelly_with_cv
 
@@ -377,6 +378,14 @@ class PolymarketTrader:
                 continue
             prob, X = score_result
             scored += 1
+
+            # Bayesian update: chain evidence from news, FRED, NOAA
+            category = infer_category(m)
+            prob, bayes_updates = bayesian_update_prob(
+                prob, category, m, self.macro)
+            if bayes_updates:
+                log.debug(f"Bayes: {question[:30]} {bayes_updates} "
+                          f"→ {prob:.3f}")
 
             # Collect signals from all providers
             context = {
