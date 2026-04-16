@@ -91,7 +91,7 @@ class AlphaCombinator:
     falls back to equal-weight averaging.
     """
 
-    def __init__(self, window: int = 200):
+    def __init__(self, window: int = 50):
         self.window = window
         self.history: list[dict[str, float]] = []
 
