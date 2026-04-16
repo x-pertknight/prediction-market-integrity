@@ -61,7 +61,7 @@ from data.kalshi_feature_adapter import (
 from alpha.combinator import (
     AlphaCombinator, RFSignalProvider, HMMSignalProvider,
     CrossVenueSignalProvider, MomentumSignalProvider,
-    CalibrationSignalProvider,
+    CalibrationSignalProvider, OBISignalProvider, WhaleSignalProvider,
 )
 from alpha.cross_platform_arb import CrossPlatformArb
 from models.calibration import CalibrationAnalyzer
@@ -392,9 +392,12 @@ class PaperTrader:
         self.cross_venue_signal = CrossVenueSignalProvider()
         self.momentum_signal = MomentumSignalProvider()
         self.calibration_signal = CalibrationSignalProvider(self._load_calibration())
+        self.obi_signal = OBISignalProvider()
+        self.whale_signal = WhaleSignalProvider()
         self.signal_providers = [
             self.rf_signal, self.hmm_signal, self.cross_venue_signal,
             self.momentum_signal, self.calibration_signal,
+            self.obi_signal, self.whale_signal,
         ]
 
     def _load_model(self):

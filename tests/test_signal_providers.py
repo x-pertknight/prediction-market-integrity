@@ -1,4 +1,4 @@
-"""tests/test_signal_providers.py — Unit tests for all 5 signal providers."""
+"""tests/test_signal_providers.py — Unit tests for all 7 signal providers."""
 
 import json
 import sys
@@ -16,6 +16,8 @@ from alpha.combinator import (
     CrossVenueSignalProvider,
     MomentumSignalProvider,
     CalibrationSignalProvider,
+    OBISignalProvider,
+    WhaleSignalProvider,
     SignalResult,
 )
 
@@ -261,3 +263,136 @@ class TestCalibrationSignalProvider:
         provider = CalibrationSignalProvider(analyzer)
         result = provider.score({}, {"model_prob": 1.5})
         assert 0.0 <= result.confidence <= 1.0
+
+
+# ── OBI Signal Provider ────────────────────────────────────────────────
+
+class MockOBIEngine:
+    """Mock OrderBookImbalance for testing."""
+    def __init__(self, obi: float = 0.0):
+        self._obi = obi
+
+    def fetch_and_compute(self, ticker: str) -> dict:
+        ir = (self._obi + 1.0) / 2.0
+        signal = ("BULLISH" if self._obi > 0.35 else
+                  "BEARISH" if self._obi < -0.35 else "NEUTRAL")
+        return {"obi": self._obi, "ir": ir, "signal": signal, "source": "mock"}
+
+
+class TestOBISignalProvider:
+    def test_neutral_obi(self):
+        engine = MockOBIEngine(obi=0.0)
+        provider = OBISignalProvider(obi_engine=engine)
+        result = provider.score({"ticker": "TEST"}, {})
+        assert result.confidence == pytest.approx(0.5, abs=0.01)
+        assert result.name == "obi"
+
+    def test_bullish_obi(self):
+        engine = MockOBIEngine(obi=0.6)
+        provider = OBISignalProvider(obi_engine=engine)
+        result = provider.score({"ticker": "TEST"}, {})
+        # (0.6 + 1) / 2 = 0.8
+        assert result.confidence == pytest.approx(0.8, abs=0.01)
+        assert result.metadata["signal"] == "BULLISH"
+
+    def test_bearish_obi(self):
+        engine = MockOBIEngine(obi=-0.6)
+        provider = OBISignalProvider(obi_engine=engine)
+        result = provider.score({"ticker": "TEST"}, {})
+        # (-0.6 + 1) / 2 = 0.2
+        assert result.confidence == pytest.approx(0.2, abs=0.01)
+        assert result.metadata["signal"] == "BEARISH"
+
+    def test_no_ticker_returns_neutral(self):
+        engine = MockOBIEngine(obi=0.5)
+        provider = OBISignalProvider(obi_engine=engine)
+        result = provider.score({}, {})
+        assert result.confidence == 0.5
+
+    def test_confidence_bounded(self):
+        engine = MockOBIEngine(obi=1.0)
+        provider = OBISignalProvider(obi_engine=engine)
+        result = provider.score({"ticker": "TEST"}, {})
+        assert 0.0 <= result.confidence <= 1.0
+
+
+# ── Whale Signal Provider ──────────────────────────────────────────────
+
+class TestWhaleSignalProvider:
+    def test_no_data_returns_neutral(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            provider = WhaleSignalProvider(whale_data_dir=tmpdir)
+            result = provider.score({"title": "Test market"}, {})
+            assert result.confidence == 0.5
+            assert result.name == "whale_smi"
+
+    def test_matched_signal_returns_smi(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            whale_dir = Path(tmpdir)
+            latest = {
+                "top_signals": [{
+                    "market_slug": "bitcoin-above-100k",
+                    "title": "Will Bitcoin exceed 100000",
+                    "smart_money_idx": 75.0,
+                    "whale_count": 5,
+                    "conviction_score": 80.0,
+                    "direction": "BULLISH",
+                    "signal_strength": "STRONG",
+                }],
+            }
+            (whale_dir / "whale_latest.json").write_text(json.dumps(latest))
+            provider = WhaleSignalProvider(whale_data_dir=tmpdir)
+            result = provider.score(
+                {"title": "Will Bitcoin exceed 100000", "slug": "bitcoin-above-100k"},
+                {},
+            )
+            assert result.metadata["matched"] is True
+            # SMI 75 -> confidence 0.75
+            assert result.confidence == pytest.approx(0.75, abs=0.01)
+
+    def test_unmatched_market_returns_neutral(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            whale_dir = Path(tmpdir)
+            latest = {
+                "top_signals": [{
+                    "market_slug": "bitcoin-above-100k",
+                    "title": "Will Bitcoin exceed 100000",
+                    "smart_money_idx": 80.0,
+                    "whale_count": 4,
+                    "conviction_score": 70.0,
+                    "direction": "BULLISH",
+                    "signal_strength": "STRONG",
+                }],
+            }
+            (whale_dir / "whale_latest.json").write_text(json.dumps(latest))
+            provider = WhaleSignalProvider(whale_data_dir=tmpdir)
+            result = provider.score(
+                {"title": "Weather in Miami tomorrow", "slug": "miami-weather"},
+                {},
+            )
+            assert result.metadata["matched"] is False
+            assert result.confidence == 0.5
+
+    def test_slug_match_takes_priority(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            whale_dir = Path(tmpdir)
+            latest = {
+                "top_signals": [{
+                    "market_slug": "eth-above-5000",
+                    "title": "Ethereum hits 5000",
+                    "smart_money_idx": 30.0,
+                    "whale_count": 3,
+                    "conviction_score": 55.0,
+                    "direction": "BEARISH",
+                    "signal_strength": "MODERATE",
+                }],
+            }
+            (whale_dir / "whale_latest.json").write_text(json.dumps(latest))
+            provider = WhaleSignalProvider(whale_data_dir=tmpdir)
+            result = provider.score(
+                {"title": "ETH 5000", "slug": "eth-above-5000"},
+                {},
+            )
+            assert result.metadata["matched"] is True
+            # SMI 30 -> confidence 0.30
+            assert result.confidence == pytest.approx(0.30, abs=0.01)

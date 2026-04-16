@@ -501,3 +501,126 @@ class CalibrationSignalProvider(SignalProvider):
                 "category": category,
             },
         )
+
+
+class OBISignalProvider(SignalProvider):
+    """Order Book Imbalance signal: bid/ask volume ratio predicts short-term price.
+
+    OBI > 0.35 → bullish (confidence > 0.5)
+    OBI < -0.35 → bearish (confidence < 0.5)
+    Uses live orderbook when available, mock proxy from volume otherwise.
+    """
+
+    @property
+    def name(self) -> str:
+        return "obi"
+
+    def __init__(self, obi_engine=None):
+        if obi_engine is not None:
+            self._obi = obi_engine
+        else:
+            from alpha.obi import OrderBookImbalance
+            self._obi = OrderBookImbalance()
+
+    def score(self, market: dict, context: dict) -> SignalResult:
+        ticker = market.get("ticker", market.get("condition_id", ""))
+        if not ticker:
+            return SignalResult(name=self.name, confidence=0.5)
+
+        try:
+            result = self._obi.fetch_and_compute(ticker)
+            obi_val = result.get("obi", 0.0)
+            # Map OBI [-1, 1] to confidence [0, 1] via linear transform
+            confidence = (obi_val + 1.0) / 2.0
+            return SignalResult(
+                name=self.name,
+                confidence=float(np.clip(confidence, 0.0, 1.0)),
+                metadata={
+                    "obi": obi_val,
+                    "ir": result.get("ir", 0.5),
+                    "signal": result.get("signal", "NEUTRAL"),
+                    "source": result.get("source", "unknown"),
+                },
+            )
+        except Exception as e:
+            return SignalResult(
+                name=self.name, confidence=0.5,
+                metadata={"error": str(e)},
+            )
+
+
+class WhaleSignalProvider(SignalProvider):
+    """Whale/Smart Money signal: conviction from whale cluster consensus.
+
+    Loads latest whale scan data. Markets with 3+ whales same direction
+    get strong directional signal. SMI > 60 → bullish, SMI < 40 → bearish.
+    Returns 0.5 (neutral) when no whale data available for a market.
+    """
+
+    @property
+    def name(self) -> str:
+        return "whale_smi"
+
+    def __init__(self, whale_data_dir: str = "data/whale"):
+        self._whale_dir = Path(whale_data_dir)
+        self._latest: dict = {}
+        self._load_latest()
+
+    def _load_latest(self) -> None:
+        """Load the most recent whale scan snapshot."""
+        latest_path = self._whale_dir / "whale_latest.json"
+        if latest_path.exists():
+            try:
+                self._latest = json.loads(latest_path.read_text())
+            except Exception:
+                self._latest = {}
+
+    def score(self, market: dict, context: dict) -> SignalResult:
+        if not self._latest:
+            return SignalResult(name=self.name, confidence=0.5,
+                                metadata={"available": False})
+
+        # Match market to whale signals by slug/title similarity
+        market_title = (
+            market.get("title", "") or market.get("question", "")
+        ).lower()
+        market_slug = (market.get("slug", "") or "").lower()
+
+        best_signal = None
+        best_match = 0.0
+        for signal in self._latest.get("top_signals", []):
+            sig_slug = signal.get("market_slug", "").lower()
+            sig_title = signal.get("title", "").lower()
+            # Check slug match or title word overlap
+            if sig_slug and (sig_slug in market_slug or market_slug in sig_slug):
+                best_signal = signal
+                break
+            if sig_title and market_title:
+                words_a = set(market_title.split())
+                words_b = set(sig_title.split())
+                if words_a and words_b:
+                    overlap = len(words_a & words_b) / len(words_a | words_b)
+                    if overlap > best_match and overlap > 0.5:
+                        best_match = overlap
+                        best_signal = signal
+
+        if best_signal is None:
+            return SignalResult(name=self.name, confidence=0.5,
+                                metadata={"matched": False})
+
+        # Map SMI (0-100) to confidence (0-1)
+        smi = best_signal.get("smart_money_idx", 50.0)
+        confidence = smi / 100.0
+
+        return SignalResult(
+            name=self.name,
+            confidence=float(np.clip(confidence, 0.0, 1.0)),
+            metadata={
+                "matched": True,
+                "smi": smi,
+                "whale_count": best_signal.get("whale_count", 0),
+                "conviction": best_signal.get("conviction_score", 0),
+                "direction": best_signal.get("direction", ""),
+                "strength": best_signal.get("signal_strength", ""),
+            },
+        )
