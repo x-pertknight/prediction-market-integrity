@@ -65,6 +65,7 @@ from alpha.combinator import (
 )
 from alpha.cross_platform_arb import CrossPlatformArb
 from alpha.bayes_updater import bayesian_update_prob
+from alpha.vol_surface import VolSurfaceScanner
 from models.calibration import CalibrationAnalyzer
 from risk.kelly import kelly_with_cv
 
@@ -717,6 +718,14 @@ class PaperTrader:
         start_command_listener()
         start_daily_summary()
         log.info("Telegram bot started — commands: /status /trades /stop")
+
+        # Start vol surface scanner background thread
+        self.vol_scanner = VolSurfaceScanner(
+            fetch_markets_fn=fetch_markets,
+            kelly_fn=kelly_with_cv,
+            bankroll_fn=lambda: self.bankroll,
+        )
+        self.vol_scanner.start()
 
         log.info(f"Paper trader started | poll={POLL_INTERVAL}s | "
                  f"edge={EDGE_MULT} | fee_model={FEE_MODEL} | api=kalshi-prod | "
