@@ -15,10 +15,10 @@ NEVER use loss-count as primary halt trigger with <30% win rate.
 Use drawdown-based rules ONLY.
 
 Rules (non-discretionary):
-  1. Rolling Sharpe (100-trade) < 0.0     → HALT (need 100+ trades for significance)
+  1. Rolling Sharpe (100-trade) < -0.5    → HALT (need 100+ trades for significance)
   2. Drawdown > 15% of peak equity        → HALT
   3. Daily drawdown > 8% of equity         → reduce sizing 50%
-  4. Monthly Sharpe (min 50 trades) < 0.0  → HALT until manual review
+  4. Monthly Sharpe (min 50 trades) < -0.5 → HALT until manual review
 
 Every trigger is logged to data/circuit_breaker_log.csv.
 Paper trader and executor MUST call check() before every trade.
@@ -33,10 +33,10 @@ LOG_PATH = Path("data/circuit_breaker_log.csv")
 
 # Calibrated for 19% win rate
 ROLLING_WINDOW       = 100    # need 100+ trades for statistically meaningful Sharpe
-MIN_ROLLING_SHARPE   = 0.0    # halt only when rolling Sharpe goes negative
+MIN_ROLLING_SHARPE   = -0.5   # halt on meaningful negative Sharpe, not noise around zero
 DRAWDOWN_HALT_PCT    = 0.15   # 15% drawdown from peak equity → HALT
 DAILY_DD_REDUCE_PCT  = 0.08   # 8% daily drawdown → reduce sizing (not halt)
-MONTHLY_SHARPE_HALT  = 0.0    # monthly Sharpe < 0 with enough trades → HALT
+MONTHLY_SHARPE_HALT  = -0.5   # monthly Sharpe meaningfully negative → HALT
 MIN_MONTHLY_TRADES   = 50     # need 50 trades for monthly Sharpe to be meaningful
 
 SIZING_FULL    = 1.0
@@ -108,11 +108,16 @@ class CircuitBreaker:
 
     def _check_rules(self) -> None:
         """Evaluate all circuit breaker rules. Drawdown-based, not loss-count."""
-        # Rule 1: Rolling Sharpe (100-trade window) < 0
+        # Already halted — don't re-evaluate (prevents log spam cascade)
+        if self.halted:
+            return
+
+        # Rule 1: Rolling Sharpe (100-trade window) < -0.5
         if len(self.trades) >= ROLLING_WINDOW:
             recent = [t["pnl"] for t in self.trades[-ROLLING_WINDOW:]]
             arr = np.array(recent)
-            if arr.std() > 0:
+            # Require minimum std to avoid noise Sharpe from near-identical trades
+            if arr.std() >= 0.005:
                 rolling_sharpe = arr.mean() / arr.std() * np.sqrt(252)
                 if rolling_sharpe < MIN_ROLLING_SHARPE:
                     self._halt(f"Rolling Sharpe ({ROLLING_WINDOW}-trade) = "
@@ -148,7 +153,7 @@ class CircuitBreaker:
                            if t["ts"].timestamp() > month_cutoff]
             if len(month_trades) >= MIN_MONTHLY_TRADES:
                 arr = np.array(month_trades)
-                if arr.std() > 0:
+                if arr.std() >= 0.005:
                     monthly_sharpe = arr.mean() / arr.std() * np.sqrt(252)
                     if monthly_sharpe < MONTHLY_SHARPE_HALT:
                         self._halt(f"Monthly Sharpe ({len(month_trades)} trades) = "
@@ -196,7 +201,7 @@ class CircuitBreaker:
                      if self.trades else []
         arr = np.array(recent_pnl) if recent_pnl else np.array([0.0])
         rolling_sharpe = arr.mean() / arr.std() * np.sqrt(252) \
-                         if arr.std() > 0 else 0.0
+                         if arr.std() >= 0.005 else 0.0
 
         return {
             "halted":            self.halted,
