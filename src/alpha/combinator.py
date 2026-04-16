@@ -216,11 +216,14 @@ class AlphaCombinator:
             # Single signal: N_effective = 1 by definition
             n_effective = 1.0
         else:
-            eigenvalues = np.linalg.eigvalsh(corr_matrix)
-            eigenvalues = eigenvalues[eigenvalues > 0]
-            n_effective = float(
-                (eigenvalues.sum() ** 2) / (eigenvalues ** 2).sum()
-            )
+            try:
+                eigenvalues = np.linalg.eigvalsh(corr_matrix)
+                eigenvalues = eigenvalues[eigenvalues > 0]
+                n_effective = float(
+                    (eigenvalues.sum() ** 2) / (eigenvalues ** 2).sum()
+                ) if len(eigenvalues) > 0 else float(n_signals)
+            except np.linalg.LinAlgError:
+                n_effective = float(n_signals)
         mean_ic = float(np.mean(np.abs(residuals) / residual_stds))
         ir_estimate = mean_ic * np.sqrt(n_effective)
 
