@@ -27,9 +27,16 @@ reports/*.csv
 
 # Generated runtime data
 data/paper_trades/
+data/paper_trades.csv
+data/polymarket_trades.csv
+data/circuit_breaker_log.csv
+data/circuit_breaker_log.csv.bak
+data/risk_state.json
 data/signals/
 data/whale/
+data/momentum_history.json
 logs/
+.coverage
 
 # OS
 .DS_Store
@@ -38,3 +45,4 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+keys/
