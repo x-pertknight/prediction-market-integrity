@@ -7,6 +7,13 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Load .env BEFORE importing modules (they read os.environ at import time)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+except ImportError:
+    pass
+
 from data.fear_greed       import fetch_and_save as fetch_fg
 from data.wikipedia_pageviews import fetch_and_save as fetch_wiki
 from data.binance_price    import fetch_and_save as fetch_binance

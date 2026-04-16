@@ -104,14 +104,31 @@ def _news_evidence(category: str, macro: dict) -> tuple[float, float] | None:
     if count == 0:
         return None
 
-    # High headline volume = uncertainty/negative sentiment (crisis coverage)
-    # Threshold: >50 headlines in 7 days = elevated coverage
-    if count > 50:
-        return (0.30, 0.70)  # bearish — negative headlines dominate
-    elif count > 20:
-        return None  # neutral volume, skip
-    else:
-        return (0.70, 0.30)  # low coverage = positive/stable
+    # NewsAPI totalResults counts ALL articles matching query in 7 days.
+    # Baseline volumes are high (crypto ~2000, politics ~15000, sports ~3500).
+    # Category-specific thresholds based on observed baselines:
+    _BEARISH_THRESHOLDS = {
+        "crypto": 5000,    # 2.5x normal (crisis/crash coverage)
+        "weather": 1000,   # 4x normal (extreme weather event)
+        "macro": 2000,     # 3x normal (rate shock, recession fear)
+        "politics": 30000, # 2x normal (major crisis)
+        "sports": 8000,    # 2x normal (scandal/controversy)
+    }
+    _BULLISH_THRESHOLDS = {
+        "crypto": 500,     # low coverage = stable/boring market
+        "weather": 50,     # very quiet weather news
+        "macro": 150,      # low macro anxiety
+        "politics": 3000,  # unusually quiet political news
+        "sports": 1000,    # off-season quiet
+    }
+    bearish_thresh = _BEARISH_THRESHOLDS.get(relevant_news_cat, 5000)
+    bullish_thresh = _BULLISH_THRESHOLDS.get(relevant_news_cat, 500)
+
+    if count > bearish_thresh:
+        return (0.30, 0.70)  # crisis-level coverage — bearish
+    elif count < bullish_thresh:
+        return (0.70, 0.30)  # low coverage = stable — bullish
+    return None  # normal volume — no signal
 
 
 def _fred_evidence(category: str, macro: dict) -> tuple[float, float] | None:
