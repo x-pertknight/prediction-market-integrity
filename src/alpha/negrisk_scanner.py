@@ -102,11 +102,23 @@ def fetch_negrisk_events(max_events: int = 300) -> list[dict]:
 
 
 def load_whitelist(path: Path = WHITELIST_PATH) -> set[str]:
-    """Event ids a human has verified as exhaustive outcome sets."""
+    """Event ids verified as exhaustive outcome sets (see
+    docs/negrisk-whitelist-dossier.md for the review protocol)."""
     try:
         return {str(x) for x in json.loads(path.read_text())}
     except Exception:
         return set()
+
+
+def fetch_event(event_id: str) -> dict | None:
+    """Fetch a single event by id (used by the paper resolver)."""
+    try:
+        r = requests.get(f"{GAMMA_BASE}/events/{event_id}", timeout=15)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
 
 
 # ── Pure analysis (no network — unit tested) ────────────────────────────────────
@@ -208,12 +220,23 @@ def append_rows(rows: list[dict], csv_path: Path = CSV_PATH) -> None:
 
 def scan_once(threshold: float = DEFAULT_THRESHOLD,
               max_events: int = 300,
-              csv_path: Path = CSV_PATH) -> list[dict]:
-    """One full scan: fetch → analyze → log. Returns triggered rows."""
+              csv_path: Path = CSV_PATH,
+              paper: bool = False) -> list[dict]:
+    """One full scan: fetch → analyze → log (→ paper-trade if enabled)."""
     whitelist = load_whitelist()
     events = fetch_negrisk_events(max_events)
     rows = [r for r in (analyze_event(e, whitelist, threshold) for e in events) if r]
     append_rows(rows, csv_path)
+
+    if paper:
+        from alpha.negrisk_paper import paper_cycle
+        from data.polymarket_clob import fetch_orderbook
+        events_by_id = {str(e.get("id", "")): e for e in events}
+        try:
+            paper_cycle(rows, events_by_id, live_legs, _leg_fee,
+                        fetch_orderbook, fetch_event)
+        except Exception as e:
+            print(f"  [NegRisk] paper cycle error: {e}")
 
     triggered = [r for r in rows if r["tradable_long"] or r["tradable_short"]]
     print(f"[NegRisk] {len(events)} negRisk events | {len(rows)} analyzed | "
@@ -239,14 +262,16 @@ def main() -> None:
                     help="rescan every N seconds")
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     ap.add_argument("--max-events", type=int, default=300)
+    ap.add_argument("--paper", action="store_true",
+                    help="simulate set entries at the CLOB touch (no real orders)")
     args = ap.parse_args()
 
     if args.loop:
         while True:
-            scan_once(args.threshold, args.max_events)
+            scan_once(args.threshold, args.max_events, paper=args.paper)
             time.sleep(args.loop)
     else:
-        scan_once(args.threshold, args.max_events)
+        scan_once(args.threshold, args.max_events, paper=args.paper)
 
 
 if __name__ == "__main__":

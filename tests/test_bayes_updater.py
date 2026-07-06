@@ -121,7 +121,10 @@ class TestBayesianUpdateProb:
 
 
 class TestNewsEvidence:
-    def test_no_file_returns_none(self):
+    def test_no_file_returns_none(self, tmp_path, monkeypatch):
+        # Hermetic: run from an empty cwd so a refreshed data/raw/newsapi.csv
+        # in the repo can't leak into the test.
+        monkeypatch.chdir(tmp_path)
         assert _news_evidence("Crypto", {}) is None
 
     def test_non_matching_category_returns_none(self):

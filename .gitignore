@@ -47,3 +47,5 @@ Thumbs.db
 .idea/
 keys/
 data/negrisk_log.csv
+data/negrisk_paper_positions.json
+data/negrisk_paper_trades.csv
