@@ -56,22 +56,27 @@ def fetch_markets(limit: int = 200) -> pd.DataFrame:
 
 
 def fetch_orderbook(token_id: str) -> dict:
-    """Fetch best bid/ask and spread from CLOB for a token."""
+    """Fetch best bid/ask and spread from CLOB for a token.
+
+    The /book endpoint returns levels sorted worst→best (best level LAST,
+    verified live 2026-07-06), so sort by price instead of trusting array
+    order. Depth = size within the 5 levels closest to the touch.
+    """
     try:
         r = requests.get(f"{BASE}/book", params={"token_id": token_id}, timeout=10)
         if r.status_code == 200:
             data = r.json()
-            bids = data.get("bids", [])
-            asks = data.get("asks", [])
-            best_bid = float(bids[0]["price"]) if bids else 0.0
-            best_ask = float(asks[0]["price"]) if asks else 1.0
+            bids = sorted((float(b["price"]), float(b["size"])) for b in data.get("bids", []))
+            asks = sorted((float(a["price"]), float(a["size"])) for a in data.get("asks", []))
+            best_bid = bids[-1][0] if bids else 0.0
+            best_ask = asks[0][0] if asks else 1.0
             return {
                 "token_id":  token_id,
                 "best_bid":  best_bid,
                 "best_ask":  best_ask,
                 "spread":    best_ask - best_bid,
-                "bid_depth": sum(float(b["size"]) for b in bids[:5]),
-                "ask_depth": sum(float(a["size"]) for a in asks[:5]),
+                "bid_depth": sum(sz for _, sz in bids[-5:]),
+                "ask_depth": sum(sz for _, sz in asks[:5]),
             }
     except Exception:
         pass
