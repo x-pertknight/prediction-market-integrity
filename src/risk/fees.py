@@ -7,9 +7,16 @@ Kalshi: Parabolic taker fee  fee = 0.07 * P * (1 - P)
   - Zero settlement fee. Fee only on trade execution (buy/sell).
   - In backtest: contracts settle at 0/1, so fee applies on ENTRY only.
 
-Polymarket: Conditional — most markets are FREE.
-  - Crypto short-term, NCAAB, some sports: fee = P * (1 - P) * fee_rate
-  - Maker gets rebate (20% crypto, 25% sports)
+Polymarket: Per-category taker fee (docs.polymarket.com, verified 2026-07-06).
+  - fee = rate * (P * (1 - P)) ** exponent, exponent = 1 on all current schedules
+  - Rates: crypto 0.07, sports 0.03, finance/politics/tech/mentions 0.04,
+    economics/culture/weather/other 0.05, geopolitics 0.
+  - Maker gets rebate (20-25% of taker fee); sells and makers pay no fee.
+  - Markets created before 2026-03-30 in some categories are grandfathered
+    fee-free; charging the fee anyway is the conservative default here.
+  - Gamma API exposes the exact per-market schedule in `feeSchedule`
+    (e.g. {'rate': 0.03, 'exponent': 1, 'takerOnly': True, 'rebateRate': 0.25});
+    prefer polymarket_fee_from_schedule() when the market dict is available.
   - US regulated (CFTC): flat 0.01% taker on everything
 """
 
@@ -44,39 +51,96 @@ def kalshi_round_trip_fee(entry_price: float, exit_price: float) -> float:
 
 # ── Polymarket ──────────────────────────────────────────────────────────────────
 
-# Market types that charge fees on Polymarket
-POLY_FEE_MARKETS = frozenset({
-    "crypto_15m", "crypto_5m", "crypto_1h", "crypto_4h",
-    "crypto_daily", "crypto_weekly",
-    "ncaab",
-    "sport_fee",
-})
+# Official per-category taker fee rates (docs.polymarket.com, 2026-07-06).
+POLY_CATEGORY_FEE_RATES = {
+    "crypto": 0.07,
+    "sports": 0.03,
+    "finance": 0.04,
+    "politics": 0.04,
+    "tech": 0.04,
+    "mentions": 0.04,
+    "economics": 0.05,
+    "culture": 0.05,
+    "weather": 0.05,
+    "other": 0.05,
+    "geopolitics": 0.0,
+}
 
-POLY_TAKER_RATE = 0.02       # ~1.56% effective max at p=0.50
+# infer_category() output (Kalshi-style names) → Polymarket fee category
+_TRAPTRADE_CAT_TO_FEE_CAT = {
+    "Crypto": "crypto",
+    "Sports": "sports",
+    "Politics": "politics",
+    "Elections": "politics",
+    "Financials": "finance",
+    "Companies": "finance",
+    "Economics": "economics",
+    "Entertainment": "culture",
+    "Social": "culture",
+    "Climate and Weather": "weather",
+    "Education": "other",
+    "Exotics": "other",
+}
+
 POLY_US_FLAT_RATE = 0.0001   # 0.01% CFTC-regulated flat rate
 
 
+def _poly_fee_category(market_type: str) -> str:
+    """Resolve a market_type/category string to a Polymarket fee category.
+
+    Accepts fee categories ("sports"), infer_category() names ("Sports"),
+    and legacy strings ("crypto_daily", "ncaab", "sport_fee").
+    Unknown types fall back to "other" (0.05) — conservative, since only
+    geopolitics is fee-free today.
+    """
+    if market_type in POLY_CATEGORY_FEE_RATES:
+        return market_type
+    if market_type in _TRAPTRADE_CAT_TO_FEE_CAT:
+        return _TRAPTRADE_CAT_TO_FEE_CAT[market_type]
+    mt = market_type.lower()
+    if mt in POLY_CATEGORY_FEE_RATES:
+        return mt
+    if mt.startswith("crypto"):
+        return "crypto"
+    if mt.startswith("sport") or mt in ("ncaab", "nfl", "nba", "mlb", "nhl"):
+        return "sports"
+    return "other"
+
+
 def polymarket_taker_fee(price: float, market_type: str = "") -> float:
+    """Polymarket taker fee per share: rate * P * (1 - P), rate by category."""
+    rate = POLY_CATEGORY_FEE_RATES[_poly_fee_category(market_type)]
+    p = np.clip(price, 0.0, 1.0)
+    return p * (1.0 - p) * rate
+
+
+def polymarket_fee_from_schedule(price: float, schedule: dict | None) -> float:
+    """Exact per-market taker fee from the Gamma API `feeSchedule` field.
+
+    Schedule shape: {'rate': 0.03, 'exponent': 1, 'takerOnly': True,
+    'rebateRate': 0.25}. Missing/empty schedule → no fee (the API omits it
+    on fee-free markets).
     """
-    Polymarket taker fee per share. Most markets: FREE.
-    Crypto/NCAAB/some sports: parabolic with 0.02 rate.
-    """
-    if market_type in POLY_FEE_MARKETS:
-        p = np.clip(price, 0.0, 1.0)
-        return p * (1.0 - p) * POLY_TAKER_RATE
-    return 0.0
+    if not schedule:
+        return 0.0
+    rate = float(schedule.get("rate", 0) or 0)
+    if rate == 0.0:
+        return 0.0
+    exponent = float(schedule.get("exponent", 1) or 1)
+    p = float(np.clip(price, 0.0, 1.0))
+    return rate * (p * (1.0 - p)) ** exponent
 
 
 def polymarket_maker_rebate(price: float, market_type: str = "") -> float:
-    """Polymarket maker rebate — you GET PAID for limit orders."""
+    """Polymarket maker rebate — you GET PAID for limit orders.
+
+    25% of taker fee on sports, 20% elsewhere (official rebateRate values).
+    """
     fee = polymarket_taker_fee(price, market_type)
     if fee == 0.0:
         return 0.0
-    if "crypto" in market_type:
-        return fee * 0.20
-    if "sport" in market_type or "ncaab" in market_type:
-        return fee * 0.25
-    return 0.0
+    rebate_rate = 0.25 if _poly_fee_category(market_type) == "sports" else 0.20
+    return fee * rebate_rate
 
 
 def polymarket_us_fee(price: float) -> float:
@@ -85,13 +149,6 @@ def polymarket_us_fee(price: float) -> float:
 
 
 # ── Backtest integration ────────────────────────────────────────────────────────
-
-# Map category → Polymarket market_type for fee determination
-# Most categories are fee-free; only crypto short-duration and some sports pay
-_CATEGORY_TO_POLY_TYPE = {
-    "Crypto": "crypto_daily",  # conservative: assume daily crypto fee applies
-    "Sports": "sport_fee",     # some sports markets have fees
-}
 
 
 def compute_trade_fees(entry_prices: pd.Series,
@@ -104,7 +161,7 @@ def compute_trade_fees(entry_prices: pd.Series,
     fee_model:
       "none"        — zero fees
       "kalshi"      — parabolic taker on entry; settlement = free
-      "polymarket"  — conditional (free for most categories)
+      "polymarket"  — per-category rate * P * (1-P); "other" 0.05 if no category
       "polymarket_us" — CFTC flat 0.01%
 
     Returns DataFrame with columns: fee_entry, fee_exit, fee_total
@@ -130,15 +187,12 @@ def compute_trade_fees(entry_prices: pd.Series,
         )
 
     elif fee_model == "polymarket":
-        if categories is not None:
-            cats = categories.values
-            for i in range(n):
-                cat = str(cats[i]) if pd.notna(cats[i]) else ""
-                mtype = _CATEGORY_TO_POLY_TYPE.get(cat, "")
-                fee_entry[i] = polymarket_taker_fee(entry[i], mtype)
-                not_settle = 0.01 < exit_[i] < 0.99
-                fee_exit[i] = polymarket_taker_fee(exit_[i], mtype) if not_settle else 0.0
-        # else: all zero (most markets are free)
+        cats = categories.values if categories is not None else np.array([""] * n, dtype=object)
+        for i in range(n):
+            cat = str(cats[i]) if pd.notna(cats[i]) else ""
+            fee_entry[i] = polymarket_taker_fee(entry[i], cat)
+            not_settle = 0.01 < exit_[i] < 0.99
+            fee_exit[i] = polymarket_taker_fee(exit_[i], cat) if not_settle else 0.0
 
     elif fee_model == "polymarket_us":
         fee_entry = entry * POLY_US_FLAT_RATE

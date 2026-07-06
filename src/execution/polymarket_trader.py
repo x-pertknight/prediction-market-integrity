@@ -40,7 +40,7 @@ except ImportError:
 
 from risk.circuit_breaker import CircuitBreaker
 from risk.position_manager import PositionManager
-from risk.fees import kalshi_taker_fee
+from risk.fees import polymarket_taker_fee
 from risk.market_impact import market_impact, should_trade
 from data.polymarket_feature_adapter import (
     build_features, infer_category, market_passes_filter, MODEL_FEATURES,
@@ -496,7 +496,7 @@ class PolymarketTrader:
             entry_price=price,
             model_prob=effective_prob,
             size_dollars=size_dollars,
-            fee=kalshi_taker_fee(price) * size_dollars,
+            fee=polymarket_taker_fee(price, category) * size_dollars,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         self.positions[market_id] = pos

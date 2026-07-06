@@ -10,7 +10,8 @@ import pytest
 from risk.fees import (
     kalshi_taker_fee, kalshi_total_fee, kalshi_round_trip_fee,
     polymarket_taker_fee, polymarket_maker_rebate, polymarket_us_fee,
-    compute_trade_fees, KALSHI_TAKER_COEFF,
+    polymarket_fee_from_schedule, compute_trade_fees,
+    KALSHI_TAKER_COEFF, POLY_CATEGORY_FEE_RATES,
 )
 
 
@@ -65,20 +66,52 @@ class TestKalshiFees:
 # ── Polymarket fees ──────────────────────────────────────────────────────────
 
 class TestPolymarketFees:
-    def test_free_market(self):
-        """Most markets on Polymarket are fee-free."""
-        assert polymarket_taker_fee(0.50, "politics") == 0.0
-        assert polymarket_taker_fee(0.50, "") == 0.0
+    def test_geopolitics_free(self):
+        """Geopolitics is the only fee-free category (2026 fee schedule)."""
+        assert polymarket_taker_fee(0.50, "geopolitics") == 0.0
+
+    def test_politics_fee(self):
+        """Politics: P*(1-P)*0.04 since the 2026 fee rollout."""
+        fee = polymarket_taker_fee(0.50, "politics")
+        assert fee == pytest.approx(0.50 * 0.50 * 0.04, abs=1e-8)
+
+    def test_unknown_category_conservative(self):
+        """Unknown/empty category falls back to 'other' (0.05), not free."""
+        fee = polymarket_taker_fee(0.50, "")
+        assert fee == pytest.approx(0.50 * 0.50 * 0.05, abs=1e-8)
 
     def test_crypto_fee(self):
-        """Crypto short-term markets: P*(1-P)*0.02"""
+        """Crypto markets: P*(1-P)*0.07 (legacy market_type strings resolve)."""
         fee = polymarket_taker_fee(0.50, "crypto_daily")
-        expected = 0.50 * 0.50 * 0.02
+        expected = 0.50 * 0.50 * 0.07
         assert fee == pytest.approx(expected, abs=1e-8)
 
     def test_ncaab_fee(self):
-        """NCAAB markets have fees."""
-        assert polymarket_taker_fee(0.50, "ncaab") > 0
+        """NCAAB resolves to sports rate 0.03."""
+        fee = polymarket_taker_fee(0.50, "ncaab")
+        assert fee == pytest.approx(0.50 * 0.50 * 0.03, abs=1e-8)
+
+    def test_traptrade_category_names_resolve(self):
+        """infer_category() outputs map to the official fee table."""
+        assert polymarket_taker_fee(0.50, "Sports") == pytest.approx(0.0075, abs=1e-8)
+        assert polymarket_taker_fee(0.50, "Elections") == pytest.approx(0.01, abs=1e-8)
+        assert polymarket_taker_fee(0.50, "Climate and Weather") == pytest.approx(0.0125, abs=1e-8)
+
+    def test_all_rates_within_official_range(self):
+        """Every category rate is in [0, 0.07] per official docs."""
+        for rate in POLY_CATEGORY_FEE_RATES.values():
+            assert 0.0 <= rate <= 0.07
+
+    def test_fee_from_schedule(self):
+        """Gamma feeSchedule dict gives the exact per-market fee."""
+        schedule = {"rate": 0.03, "exponent": 1, "takerOnly": True, "rebateRate": 0.25}
+        fee = polymarket_fee_from_schedule(0.128, schedule)
+        assert fee == pytest.approx(0.03 * 0.128 * (1 - 0.128), abs=1e-9)
+
+    def test_fee_from_schedule_missing(self):
+        """Missing/empty schedule (fee-free market) → zero fee."""
+        assert polymarket_fee_from_schedule(0.50, None) == 0.0
+        assert polymarket_fee_from_schedule(0.50, {}) == 0.0
 
     def test_maker_rebate_crypto(self):
         """Crypto maker rebate is 20% of taker fee."""
@@ -133,6 +166,24 @@ class TestComputeTradeFees:
         result = compute_trade_fees(entry, exit_, fee_model="kalshi")
         assert list(result.columns) == ["fee_entry", "fee_exit", "fee_total"]
         assert len(result) == 3
+
+    def test_polymarket_model_uses_categories(self):
+        """Polymarket model charges per-category rates on entry."""
+        entry = pd.Series([0.50, 0.50, 0.50])
+        exit_ = pd.Series([1.0, 1.0, 1.0])  # settlement → no exit fee
+        cats = pd.Series(["Crypto", "Sports", "geopolitics"])
+        result = compute_trade_fees(entry, exit_, fee_model="polymarket", categories=cats)
+        assert result["fee_entry"].iloc[0] == pytest.approx(0.25 * 0.07, abs=1e-8)
+        assert result["fee_entry"].iloc[1] == pytest.approx(0.25 * 0.03, abs=1e-8)
+        assert result["fee_entry"].iloc[2] == 0.0
+        assert (result["fee_exit"] == 0.0).all()
+
+    def test_polymarket_model_no_categories_not_free(self):
+        """Without categories the polymarket model still charges 'other' rate."""
+        entry = pd.Series([0.50])
+        exit_ = pd.Series([1.0])
+        result = compute_trade_fees(entry, exit_, fee_model="polymarket")
+        assert result["fee_entry"].iloc[0] == pytest.approx(0.25 * 0.05, abs=1e-8)
 
     def test_fee_total_is_sum(self):
         """fee_total = fee_entry + fee_exit."""
