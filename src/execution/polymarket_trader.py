@@ -213,17 +213,33 @@ def _log_trade(row: dict) -> None:
     df.to_csv(TRADES_CSV, mode="a", header=not TRADES_CSV.exists(), index=False)
 
 
+def hours_to_expiry(market: dict) -> float | None:
+    """Hours until market end date; None if missing/unparseable.
+    Negative when the market is already past its end date."""
+    end_date = market.get("endDate") or market.get("endDateIso")
+    if not end_date:
+        return None
+    try:
+        exp = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
+        return (exp - datetime.now(timezone.utc)).total_seconds() / 3600
+    except Exception:
+        return None
+
+
 # ── Trader ────────────────────────────────────────────────────────────────────
 
 class PolymarketTrader:
     def __init__(self):
         self.model = self._load_model()
         self.macro = _load_macro()
-        self.cb = CircuitBreaker()
         self.pm = PositionManager()
+        # CB drawdown % must be computed on the same base used for sizing —
+        # the default $100 made a $105 loss read as "108% drawdown"
+        self.cb = CircuitBreaker(initial_capital=self.pm.state.bankroll)
         self.positions: dict[str, Position] = {}
         self.cumulative_pnl = 0.0
         self._running = True
+        self._cb_alerted = False  # one alert per halt transition, not per market
         # Alpha combination framework
         self.arb = CrossPlatformArb()
         self.combinator = AlphaCombinator(window=50)
@@ -353,23 +369,21 @@ class PolymarketTrader:
                 pos = self.positions[market_id]
                 exit_signal = price >= pos.model_prob * EXIT_MULT
 
-                # Check expiry
-                end_date = m.get("endDate") or m.get("endDateIso")
-                if end_date:
-                    try:
-                        exp = datetime.fromisoformat(
-                            str(end_date).replace("Z", "+00:00"))
-                        hours_left = (
-                            exp - datetime.now(timezone.utc)
-                        ).total_seconds() / 3600
-                        if hours_left <= EXPIRY_EXIT_H:
-                            exit_signal = True
-                    except Exception:
-                        pass
+                hours_left = hours_to_expiry(m)
+                if hours_left is not None and hours_left <= EXPIRY_EXIT_H:
+                    exit_signal = True
 
                 if exit_signal:
                     self._execute_exit(market_id, price, m)
                     exits += 1
+                continue
+
+            # Entry gate: never open what the expiry rule above would dump
+            # on the next scan (2026-07-07: bought expiry-day dust at ask,
+            # force-sold at bid minutes later, -10.5% bankroll in 10 min)
+            hours_left = hours_to_expiry(m)
+            if hours_left is not None and hours_left <= EXPIRY_EXIT_H:
+                skipped_price += 1
                 continue
 
             # Score with RF model (returns (prob, features))
@@ -414,12 +428,16 @@ class PolymarketTrader:
             if price > effective_prob * EDGE_MULT:
                 continue
 
-            # Circuit breaker check
+            # Circuit breaker check — alert once per halt transition, not
+            # per market per scan (2026-07-07: 12,813 duplicate alerts)
             cb_status = self.cb.check()
             if not cb_status["allowed"]:
-                log.warning(f"CIRCUIT BREAKER: {cb_status['reason']}")
-                alert_circuit_breaker(cb_status["reason"])
+                if not self._cb_alerted:
+                    log.warning(f"CIRCUIT BREAKER: {cb_status['reason']}")
+                    alert_circuit_breaker(cb_status["reason"])
+                    self._cb_alerted = True
                 continue
+            self._cb_alerted = False
 
             # Position sizing via Kelly CV with combined probability
             category = infer_category(m)

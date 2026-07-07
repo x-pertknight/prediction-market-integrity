@@ -382,7 +382,8 @@ class PaperTrader:
         self.bankroll = INITIAL_BANKROLL
         self.model = self._load_model()
         self.macro = _load_macro()
-        self.cb = CircuitBreaker()
+        # CB drawdown % on the same base used for sizing (default was $100)
+        self.cb = CircuitBreaker(initial_capital=self.bankroll)
         self._running = True
         # Init library client so adapter can make authenticated prod API calls
         _init_library_client()
