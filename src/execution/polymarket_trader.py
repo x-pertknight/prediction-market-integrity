@@ -213,6 +213,29 @@ def _log_trade(row: dict) -> None:
     df.to_csv(TRADES_CSV, mode="a", header=not TRADES_CSV.exists(), index=False)
 
 
+# Microstructure entry guard (2026-07-07 incident: 30/37 buys were sub-5c
+# dust where the spread alone is ruinous). Flag-gated via env, measured in
+# paper — set MIN_ENTRY_PRICE=0 to disable. NOT backtested: paper-only slice.
+MIN_ENTRY_PRICE = float(os.getenv("MIN_ENTRY_PRICE", "0.02"))
+MAX_SPREAD_FRAC = float(os.getenv("MAX_SPREAD_FRAC", "0.20"))
+
+
+def entry_microstructure_ok(market: dict, price: float) -> tuple[bool, str]:
+    """Reject entries the book cannot support: dust prices, no bid to
+    exit into, or a spread that is a large fraction of the mid."""
+    if price < MIN_ENTRY_PRICE:
+        return False, "dust_price"
+    bid = float(market.get("bestBid") or 0)
+    ask = float(market.get("bestAsk") or 0)
+    if bid <= 0:
+        return False, "no_bid"
+    if ask > bid > 0 and MAX_SPREAD_FRAC > 0:
+        mid = (bid + ask) / 2
+        if (ask - bid) / mid > MAX_SPREAD_FRAC:
+            return False, "wide_spread"
+    return True, "ok"
+
+
 def hours_to_expiry(market: dict) -> float | None:
     """Hours until market end date; None if missing/unparseable.
     Negative when the market is already past its end date."""
@@ -383,6 +406,12 @@ class PolymarketTrader:
             # force-sold at bid minutes later, -10.5% bankroll in 10 min)
             hours_left = hours_to_expiry(m)
             if hours_left is not None and hours_left <= EXPIRY_EXIT_H:
+                skipped_price += 1
+                continue
+
+            # Entry gate: book must support the trade (dust/spread/no-bid)
+            micro_ok, _micro_reason = entry_microstructure_ok(m, price)
+            if not micro_ok:
                 skipped_price += 1
                 continue
 

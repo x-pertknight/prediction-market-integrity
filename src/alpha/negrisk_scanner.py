@@ -62,6 +62,7 @@ CSV_COLUMNS = [
     "sum_ask", "sum_bid",
     "margin_long_gross", "margin_long_net",
     "margin_short_gross", "margin_short_net",
+    "fee_long", "fee_short", "n_fee_legs",
     "exhaustive", "exhaustive_reason",
     "tradable_long", "tradable_short",
     "volume24hr", "min_leg_ask", "max_leg_ask",
@@ -193,6 +194,9 @@ def analyze_event(event: dict, whitelist: set[str] | None = None,
         "margin_long_net": round(margin_long_net, 4),
         "margin_short_gross": round(margin_short_gross, 4),
         "margin_short_net": round(margin_short_net, 4),
+        "fee_long": round(fee_long, 4),
+        "fee_short": round(fee_short, 4),
+        "n_fee_legs": sum(1 for m in legs if m.get("feesEnabled")),
         "exhaustive": exhaustive,
         "exhaustive_reason": reason,
         "tradable_long": exhaustive and margin_long_net >= threshold,
@@ -203,13 +207,121 @@ def analyze_event(event: dict, whitelist: set[str] | None = None,
     }
 
 
+# ── Daily Telegram digest ───────────────────────────────────────────────────────
+
+DIGEST_STATE_PATH = Path("data/negrisk_digest_state.json")
+DIGEST_HOUR_UTC = 7  # 09:00 CEST
+
+
+def compose_digest(log_rows, paper_trades, open_positions: int,
+                   today: str) -> str:
+    """One-message daily summary of the negRisk evidence (pure, testable).
+
+    log_rows / paper_trades: lists of dicts (today's rows)."""
+    def _f(row, key):
+        try:
+            return float(row.get(key, 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    n_rows = len(log_rows)
+    events = {r.get("event_id") for r in log_rows}
+    best_long = max((r for r in log_rows if str(r.get("exhaustive")) == "True"),
+                    key=lambda r: _f(r, "margin_long_net"), default=None)
+    best_short = max(log_rows, key=lambda r: _f(r, "margin_short_net"),
+                     default=None)
+    windows = sum(1 for r in log_rows
+                  if str(r.get("tradable_long")) == "True"
+                  or str(r.get("tradable_short")) == "True")
+    gated = max((r for r in log_rows if str(r.get("exhaustive")) == "False"
+                 and _f(r, "margin_long_net") > 0),
+                key=lambda r: _f(r, "margin_long_net"), default=None)
+
+    opens = [t for t in paper_trades if t.get("action") == "OPEN"]
+    resolves = [t for t in paper_trades if t.get("action") == "RESOLVE"]
+    resolved_pnl = sum(_f(t, "total_pnl") for t in resolves)
+
+    lines = [f"🧭 <b>NEGRISK DIGEST</b> — {today}",
+             f"📊 {n_rows} osservazioni su {len(events)} eventi"]
+    if best_long is not None:
+        lines.append(f"🟢 Best LONG net (esaustivo): "
+                     f"{_f(best_long, 'margin_long_net'):+.4f} — "
+                     f"{str(best_long.get('title'))[:40]}")
+    if best_short is not None:
+        lines.append(f"🔴 Best SHORT net: "
+                     f"{_f(best_short, 'margin_short_net'):+.4f} — "
+                     f"{str(best_short.get('title'))[:40]}")
+    lines.append(f"⚡ Finestre sopra soglia: {windows}")
+    lines.append(f"📄 Paper: {len(opens)} aperture, {len(resolves)} risolte "
+                 f"(PnL {resolved_pnl:+.2f}), {open_positions} set aperti")
+    if gated is not None:
+        lines.append(f"🚧 Gated (non esaustivo): "
+                     f"{_f(gated, 'margin_long_net'):+.4f} — "
+                     f"{str(gated.get('title'))[:40]}")
+    return "\n".join(lines)
+
+
+def maybe_send_daily_digest(csv_path: Path = CSV_PATH,
+                            state_path: Path = DIGEST_STATE_PATH) -> bool:
+    """Send one digest per day after DIGEST_HOUR_UTC. Returns True if sent."""
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    if now.hour < DIGEST_HOUR_UTC:
+        return False
+    try:
+        last = json.loads(state_path.read_text()).get("last_sent", "")
+    except Exception:
+        last = ""
+    if last == today:
+        return False
+
+    import csv as _csv
+    log_rows = []
+    if csv_path.exists():
+        with csv_path.open() as f:
+            log_rows = [r for r in _csv.DictReader(f)
+                        if str(r.get("timestamp", "")).startswith(today)]
+    trades_path = Path("data/negrisk_paper_trades.csv")
+    paper_trades = []
+    if trades_path.exists():
+        with trades_path.open() as f:
+            paper_trades = [r for r in _csv.DictReader(f)
+                            if str(r.get("timestamp", "")).startswith(today)]
+    try:
+        positions_path = Path("data/negrisk_paper_positions.json")
+        open_positions = len(json.loads(positions_path.read_text()))
+    except Exception:
+        open_positions = 0
+
+    text = compose_digest(log_rows, paper_trades, open_positions, today)
+    try:
+        from alerts.telegram_bot import _send
+        sent = _send(text)
+    except Exception as e:
+        print(f"  [NegRisk] digest send failed: {e}")
+        return False
+    if sent:
+        state_path.write_text(json.dumps({"last_sent": today}))
+        print(f"  [NegRisk] daily digest sent ({today})")
+    return bool(sent)
+
+
 # ── Logging + CLI ───────────────────────────────────────────────────────────────
 
 def append_rows(rows: list[dict], csv_path: Path = CSV_PATH) -> None:
-    """Append analyzed rows to the evidence log, writing a header if new."""
+    """Append analyzed rows to the evidence log, writing a header if new.
+
+    If the on-disk header doesn't match CSV_COLUMNS (schema changed), the
+    old file is rotated aside — never mixed with the new schema."""
     if not rows:
         return
     csv_path.parent.mkdir(parents=True, exist_ok=True)
+    if csv_path.exists():
+        with csv_path.open() as f:
+            header = f.readline().strip()
+        if header != ",".join(CSV_COLUMNS):
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+            csv_path.rename(csv_path.with_suffix(f".pre-{stamp}.csv"))
     is_new = not csv_path.exists()
     with csv_path.open("a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
@@ -237,6 +349,10 @@ def scan_once(threshold: float = DEFAULT_THRESHOLD,
                         fetch_orderbook, fetch_event)
         except Exception as e:
             print(f"  [NegRisk] paper cycle error: {e}")
+        try:
+            maybe_send_daily_digest()
+        except Exception as e:
+            print(f"  [NegRisk] digest error: {e}")
 
     triggered = [r for r in rows if r["tradable_long"] or r["tradable_short"]]
     print(f"[NegRisk] {len(events)} negRisk events | {len(rows)} analyzed | "
