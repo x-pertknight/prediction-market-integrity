@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -137,15 +138,27 @@ def resolve_position(pos: dict, event: dict) -> dict | None:
 # ── State + ledger ──────────────────────────────────────────────────────────────
 
 def load_positions(path: Path = POSITIONS_PATH) -> dict:
+    """Load open positions. A corrupt file is moved aside (never silently
+    overwritten as {}) so open sets can be recovered manually."""
+    if not path.exists():
+        return {}
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except Exception as e:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        corrupt = path.with_suffix(f".corrupt-{stamp}.json")
+        path.rename(corrupt)
+        print(f"  [PAPER] positions file corrupt ({e}) — moved to {corrupt}")
         return {}
 
 
 def save_positions(positions: dict, path: Path = POSITIONS_PATH) -> None:
+    """Atomic write (tmp + os.replace): a crash mid-write can never leave
+    a truncated file behind."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(positions, indent=1))
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(positions, indent=1))
+    os.replace(tmp, path)
 
 
 def log_trade(record: dict, path: Path = TRADES_PATH) -> None:

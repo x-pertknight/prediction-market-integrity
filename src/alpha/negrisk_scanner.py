@@ -337,7 +337,16 @@ def scan_once(threshold: float = DEFAULT_THRESHOLD,
     """One full scan: fetch → analyze → log (→ paper-trade if enabled)."""
     whitelist = load_whitelist()
     events = fetch_negrisk_events(max_events)
-    rows = [r for r in (analyze_event(e, whitelist, threshold) for e in events) if r]
+    rows = []
+    for e in events:
+        try:
+            r = analyze_event(e, whitelist, threshold)
+        except Exception as ex:
+            # one malformed event must never kill the collection loop
+            print(f"  [NegRisk] skipping event {e.get('id', '?')}: {ex}")
+            continue
+        if r:
+            rows.append(r)
     append_rows(rows, csv_path)
 
     if paper:
@@ -384,7 +393,11 @@ def main() -> None:
 
     if args.loop:
         while True:
-            scan_once(args.threshold, args.max_events, paper=args.paper)
+            try:
+                scan_once(args.threshold, args.max_events, paper=args.paper)
+            except Exception as e:
+                # keep the launchd service alive; next cycle retries
+                print(f"  [NegRisk] scan failed, retrying next cycle: {e}")
             time.sleep(args.loop)
     else:
         scan_once(args.threshold, args.max_events, paper=args.paper)

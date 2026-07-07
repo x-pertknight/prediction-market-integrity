@@ -35,6 +35,8 @@ MAX_DAILY_DRAWDOWN_PCT   = 0.05   # 5% of bankroll
 MAX_CONSEC_LOSSES        = 3
 MAX_MARKET_EXPOSURE_PCT  = 0.10   # 10% per market
 MAX_CATEGORY_EXPOSURE_PCT= 0.30   # 30% per category
+MAX_OPEN_POSITIONS       = 50     # max concurrent open positions
+MAX_DAILY_LOSS_DOLLARS   = 50.0   # hard dollar cap on daily loss
 
 
 def load_state() -> RiskState:
@@ -68,13 +70,22 @@ class PositionManager:
     def can_trade(self) -> tuple[bool, str]:
         if self.state.halted:
             return False, self.state.halt_reason
-        # Daily drawdown check
+        # Daily drawdown check (percentage)
         max_loss = self.state.bankroll * MAX_DAILY_DRAWDOWN_PCT
         if self.state.daily_pnl <= -max_loss:
             self.state.halted     = True
             self.state.halt_reason = "daily drawdown limit hit"
             save_state(self.state)
             return False, self.state.halt_reason
+        # Daily loss dollar cap
+        if self.state.daily_pnl <= -MAX_DAILY_LOSS_DOLLARS:
+            self.state.halted     = True
+            self.state.halt_reason = f"daily loss cap ${MAX_DAILY_LOSS_DOLLARS}"
+            save_state(self.state)
+            return False, self.state.halt_reason
+        # Max open positions
+        if len(self.state.open_positions) >= MAX_OPEN_POSITIONS:
+            return False, f"max open positions ({MAX_OPEN_POSITIONS})"
         # Consecutive losses check
         if self.state.consecutive_losses >= MAX_CONSEC_LOSSES:
             self.state.halted     = True

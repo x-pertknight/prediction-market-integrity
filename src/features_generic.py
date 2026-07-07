@@ -51,7 +51,7 @@ def clean_bulk(df: pd.DataFrame) -> pd.DataFrame:
     df["open_time"]  = pd.to_datetime(df["open_time"],  errors="coerce")
     df = df[df["result"].isin(["yes", "no"])].copy()
     df = df[df["close_time"].notna()].copy()   # drop rows with invalid/missing close_time
-    df["close_date"] = df["close_time"].dt.date
+    df["close_date"] = pd.to_datetime(df["close_time"]).dt.normalize()
     df["outcome"]    = (df["result"] == "yes").astype(int)
     for col in ["yes_bid_dollars", "yes_ask_dollars", "last_price_dollars"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -218,6 +218,7 @@ def build_weather_features(df_weather: pd.DataFrame, noaa: pd.DataFrame) -> pd.D
         df.loc[df["floor_strike"].isna(), "floor_strike"] = (
             df.loc[df["floor_strike"].isna(), "ticker"].apply(parse_strike)
         )
+    df["floor_strike"] = pd.to_numeric(df["floor_strike"], errors="coerce")
 
     df = df.merge(
         noaa[["city", "date",

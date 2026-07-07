@@ -43,23 +43,36 @@ log = logging.getLogger("telegram_bot")
 
 # ── Send / Log ───────────────────────────────────────────────────────────────
 
+MAX_RETRIES = 3
+RETRY_BACKOFF = [1, 3, 10]  # seconds
+
+
 def _send(text: str, parse_mode: str = "HTML") -> bool:
-    """Send message to Telegram. Falls back to console log if not configured."""
+    """Send message to Telegram. Retries on connection errors with backoff."""
     if not TOKEN or not CHAT_ID or TOKEN.startswith("placeholder"):
         log.info(f"[TG-LOG] {text[:200]}")
         return False
-    try:
-        r = requests.post(
-            f"{BASE}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": text, "parse_mode": parse_mode},
-            timeout=10,
-        )
-        if r.status_code != 200:
-            log.warning(f"Telegram send failed: {r.status_code} {r.text[:100]}")
-        return r.status_code == 200
-    except Exception as e:
-        log.error(f"Telegram error: {e}")
-        return False
+    for attempt in range(MAX_RETRIES):
+        try:
+            r = requests.post(
+                f"{BASE}/sendMessage",
+                json={"chat_id": CHAT_ID, "text": text, "parse_mode": parse_mode},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                log.warning(f"Telegram send failed: {r.status_code} {r.text[:100]}")
+            return r.status_code == 200
+        except (ConnectionError, requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            wait = RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)]
+            log.warning(f"Telegram connection error (attempt {attempt+1}/{MAX_RETRIES}): {e}, "
+                        f"retrying in {wait}s")
+            time.sleep(wait)
+        except Exception as e:
+            log.error(f"Telegram error: {e}")
+            return False
+    log.error(f"Telegram send failed after {MAX_RETRIES} retries")
+    return False
 
 
 def _log_event(event_type: str, data: dict) -> None:
@@ -211,6 +224,7 @@ def _poll_commands() -> None:
         return
 
     offset = 0
+    backoff = 5
     while True:
         try:
             r = requests.get(f"{BASE}/getUpdates",
@@ -218,6 +232,7 @@ def _poll_commands() -> None:
             if r.status_code != 200:
                 time.sleep(5)
                 continue
+            backoff = 5  # reset on success
             updates = r.json().get("result", [])
             for u in updates:
                 offset = u["update_id"] + 1
@@ -238,6 +253,11 @@ def _poll_commands() -> None:
                         _send("⚠️ Paper trader not running.")
                 elif text == "/start":
                     _send("ℹ️ Use: nohup python src/execution/paper_trader.py &")
+        except (ConnectionError, requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            log.warning(f"Telegram poll connection reset (backoff={backoff}s): {e}")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 120)  # exponential backoff, cap at 2min
         except Exception as e:
             log.error(f"Command poll error: {e}")
             time.sleep(10)

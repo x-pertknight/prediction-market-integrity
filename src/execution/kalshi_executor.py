@@ -32,17 +32,19 @@ API_KEY = os.getenv("KALSHI_API_KEY", "")
 PEM_PATH = os.getenv("KALSHI_PRIVATE_KEY_PATH", "")
 
 _client = None
+_orders_api = None
+_portfolio_api = None
 _cb = CircuitBreaker()
 
 
 def _get_client():
     """Lazy-init Kalshi API client with RSA auth."""
-    global _client
+    global _client, _orders_api, _portfolio_api
     if _client is not None:
         return _client
 
     try:
-        from kalshi_python_sync.api_client import KalshiAPIClient
+        from kalshi_python_sync import Configuration, ApiClient, KalshiAuth, OrdersApi, PortfolioApi
     except ImportError:
         raise ImportError("pip install kalshi-python-sync")
 
@@ -51,13 +53,13 @@ def _get_client():
     if not PEM_PATH or not Path(PEM_PATH).exists():
         raise EnvironmentError(f"KALSHI_PRIVATE_KEY_PATH not found: {PEM_PATH}")
 
-    pem = Path(PEM_PATH).read_text()
-    _client = KalshiAPIClient(
-        key_id=API_KEY,
-        private_key=pem,
-        host="https://api.elections.kalshi.com",
-    )
-    log.info("Kalshi client initialized")
+    config = Configuration()
+    _client = ApiClient(configuration=config)
+    pem_text = Path(PEM_PATH).read_text()
+    _client.kalshi_auth = KalshiAuth(API_KEY, pem_text)
+    _orders_api = OrdersApi(_client)
+    _portfolio_api = PortfolioApi(_client)
+    log.info("Kalshi client initialized (kalshi-python-sync)")
     return _client
 
 
@@ -87,16 +89,17 @@ def place_limit_order(ticker: str, side: str, price: float,
         return f"dry-run-{ticker}-{side}"
 
     try:
-        client = _get_client()
-        resp = client.create_order(
+        _get_client()
+        resp = _orders_api.create_order(
             ticker=ticker,
             side=side,
-            type="limit",
+            action="buy",
             yes_price=price_cents if side == "yes" else None,
             no_price=price_cents if side == "no" else None,
             count=quantity,
         )
-        order_id = resp.get("order", {}).get("order_id", "unknown")
+        order = resp.order
+        order_id = order.order_id if order else "unknown"
         log.info(f"ORDER PLACED: {side.upper()} {quantity}x {ticker} @ {price_cents}c "
                  f"→ {order_id}")
         return order_id
@@ -111,8 +114,8 @@ def cancel_order(order_id: str) -> bool:
         log.info(f"WOULD CANCEL: {order_id}")
         return True
     try:
-        client = _get_client()
-        client.cancel_order(order_id=order_id)
+        _get_client()
+        _orders_api.cancel_order(order_id=order_id)
         log.info(f"CANCELLED: {order_id}")
         return True
     except Exception as e:
@@ -126,9 +129,9 @@ def get_positions() -> list[dict]:
         log.info("WOULD GET POSITIONS (dry-run: empty)")
         return []
     try:
-        client = _get_client()
-        resp = client.get_positions()
-        positions = resp.get("market_positions", [])
+        _get_client()
+        resp = _portfolio_api.get_positions()
+        positions = [p.to_dict() for p in (resp.market_positions or [])]
         return positions
     except Exception as e:
         log.error(f"Get positions failed: {e}")
@@ -141,9 +144,9 @@ def get_balance() -> float:
         log.info("WOULD GET BALANCE (dry-run: $0)")
         return 0.0
     try:
-        client = _get_client()
-        resp = client.get_balance()
-        balance = resp.get("balance", 0) / 100.0  # Kalshi returns cents
+        _get_client()
+        resp = _portfolio_api.get_balance()
+        balance = (resp.balance or 0) / 100.0  # Kalshi returns cents
         return balance
     except Exception as e:
         log.error(f"Get balance failed: {e}")

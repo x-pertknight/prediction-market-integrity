@@ -543,7 +543,8 @@ class PolymarketTrader:
             entry_price=price,
             model_prob=effective_prob,
             size_dollars=size_dollars,
-            fee=polymarket_taker_fee(price, category) * size_dollars,
+            # fee is per share — scale by share count, not dollar notional
+            fee=polymarket_taker_fee(price, category) * (size_dollars / max(price, 0.01)),
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         self.positions[market_id] = pos

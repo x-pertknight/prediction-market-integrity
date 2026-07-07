@@ -124,6 +124,32 @@ class TestResolvePosition:
         assert resolve_position(self._pos("long", 0.95), event) is None
 
 
+class TestPositionsPersistence:
+    def test_atomic_roundtrip(self, tmp_path):
+        from alpha.negrisk_paper import save_positions, load_positions
+        p = tmp_path / "positions.json"
+        save_positions({"42:long": {"sets": 10}}, p)
+        assert load_positions(p) == {"42:long": {"sets": 10}}
+        assert not p.with_suffix(".tmp").exists()
+
+    def test_corrupt_file_moved_aside_not_overwritten(self, tmp_path):
+        """A truncated state file must be preserved for recovery, and the
+        loader must not silently pretend there were no open positions
+        without leaving a trace."""
+        from alpha.negrisk_paper import load_positions
+        p = tmp_path / "positions.json"
+        p.write_text('{"42:long": {"se')  # truncated mid-write
+        assert load_positions(p) == {}
+        assert not p.exists()  # moved aside, not left in place
+        corrupt = list(tmp_path.glob("positions.corrupt-*.json"))
+        assert len(corrupt) == 1
+        assert corrupt[0].read_text().startswith('{"42:long"')
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        from alpha.negrisk_paper import load_positions
+        assert load_positions(tmp_path / "nope.json") == {}
+
+
 class TestLedger:
     def test_log_trade_creates_csv(self, tmp_path):
         out = tmp_path / "trades.csv"
