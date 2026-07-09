@@ -51,3 +51,6 @@ keys/
 data/negrisk_log.csv
 data/negrisk_paper_positions.json
 data/negrisk_paper_trades.csv
+
+# local agent settings (never publish)
+.claude/

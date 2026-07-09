@@ -65,27 +65,6 @@ git add reports/ data/processed/trades_*.parquet 2>/dev/null || true
 git commit -m "report: full backtest complete — weather + all-market" 2>/dev/null || true
 echo "[Phase E] DONE at $(date -u +%H:%M:%SZ)"
 
-# ── Update progress log ───────────────────────────────────────────────────────
-cat >> progress.txt << 'EOF'
-================================================================================
-
-[SESSION: 2026-03-22 | Executor — Full Data Pull]
-Phase     : Full pipeline — NOAA max + Kalshi bulk (9247 series) + dual model
-Status    : COMPLETE
-Agent     : setup
-Completed :
-  - noaa_max_fetch: NOAA 2020→present for 6 cities
-  - kalshi_bulk_fetch: all 9247 series, all settled markets
-  - features_generic: generic (13 features) + weather (25 features) matrices
-  - model_dual: RF weather_v2 + RF generic_v1, max WF folds
-  - backtest_full: entry/exit on both models, per-category breakdown
-  - Full report: reports/backtest_full_{date}.md
-Next      : Review report, tune thresholds, add more features
-Notes     : All markets downloaded. No synthetic data. Real Kalshi prices only.
-EOF
-
-git add progress.txt
-git commit -m "chore: update progress log — full pipeline complete"
 
 echo ""
 echo "========================================"
