@@ -34,7 +34,7 @@ tradable edge confirmed. Zero capital lost.**
 ### Old TrapTrade (running in paper on the M4)
 
 negRisk scanner under launchd (auto-restart), two nohup traders (RF Polymarket +
-paper Kalshi), daily Telegram digest at 09:00. 328 tests.
+paper Kalshi), daily Telegram digest at 09:00. 430 passing tests (14 skipped).
 
 - **negRisk:** 38,608 log rows over 345 scans (2026-07-07 → 07-08). Windows with
   a net margin ≥2c on the verified whitelist: **0**. The only positive windows
@@ -169,7 +169,7 @@ micro-inefficiency.
 - **Reusable infrastructure:** cost-aware backtester, free on-chain
   dispute↔vote join, historical position reconstruction via CREATE2 + Transfer
   replay, negRisk mapping, gate harness with bootstrap CI, scanner, digest,
-  hardened risk manager, 328+ tests.
+  hardened risk manager, 430 passing tests (14 skipped).
 - **One real (non-tradable) result:** on Polymarket/UMA, positioned voters vote
   their own book (63.2%, p=1.5e-05), but their stake is negligible against the
   DVM — documentable conflict, oracle substantially sound on the outcome.
