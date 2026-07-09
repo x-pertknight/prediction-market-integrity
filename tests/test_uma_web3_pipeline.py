@@ -14,8 +14,10 @@ from eth_abi import encode as abi_encode
 from eth_utils import keccak
 
 from data.ctf_positions import (
-    TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, ZERO_ADDRESS,
-    balance_at, condition_id, decode_transfer, position_side, replay_balances, safe_proxy_address,
+    NEG_RISK_ADAPTER, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, ZERO_ADDRESS,
+    negrisk_market_id, negrisk_question_index,
+    balance_at, condition_id, decode_balance_of_batch, decode_transfer, encode_balance_of_batch,
+    position_side, replay_balances, safe_proxy_address,
 )
 from data.oo_bridge_logs import (
     PRICE_REQUEST_ADDED_TOPIC, decode_price_request_added, dvm_request_from_receipt,
@@ -251,3 +253,58 @@ class TestSafeProxyAddress:
 
     def test_distinct_owners_distinct_proxies(self):
         assert safe_proxy_address("0x" + "11" * 20) != safe_proxy_address("0x" + "22" * 20)
+
+
+class TestNegRiskIds:
+    def test_condition_id_matches_onchain(self):
+        """Anchor: NegRiskAdapter.getConditionId(0x4789db09...a406) returned
+        0xdcbb8538... on chain. keccak(NegRiskAdapter ‖ qid ‖ 2) must reproduce it."""
+        nr_qid = "0x4789db0978520585bf6db241baea334874963c7deef184d49fa331090873a406"
+        assert condition_id(NEG_RISK_ADAPTER, nr_qid) == \
+            "0xdcbb85388b085905980195fcdd3beadf36e59c4b7f67e8969a5fba467a126dc6"
+
+    def test_market_id_zeroes_last_byte(self):
+        """NegRiskIdLib: questionId shares its first 31 bytes with the marketId."""
+        qid = "0x4789db0978520585bf6db241baea334874963c7deef184d49fa331090873a406"
+        assert negrisk_market_id(qid) == \
+            "0x4789db0978520585bf6db241baea334874963c7deef184d49fa331090873a400"
+
+    def test_question_index_is_last_byte(self):
+        qid = "0x4789db0978520585bf6db241baea334874963c7deef184d49fa331090873a406"
+        assert negrisk_question_index(qid) == 6
+
+    def test_two_questions_of_one_market_share_market_id(self):
+        """Real pair: indices 6 and 3 of the same negRisk event."""
+        a = "0x4789db0978520585bf6db241baea334874963c7deef184d49fa331090873a406"
+        b = "0x4789db0978520585bf6db241baea334874963c7deef184d49fa331090873a403"
+        assert negrisk_market_id(a) == negrisk_market_id(b)
+        assert (negrisk_question_index(a), negrisk_question_index(b)) == (6, 3)
+
+    def test_negrisk_condition_differs_from_naive_uma_derivation(self):
+        """The bug this replaced: deriving from the UMA questionID under the V3
+        adapter yields an id the CTF never prepared."""
+        uma_qid = "0xfb36a66c01e058df635e2fe8a0994092ed54302ecb2489b60a1415c8b3203472"
+        nr_qid = "0x4789db0978520585bf6db241baea334874963c7deef184d49fa331090873a406"
+        naive = condition_id("0x2F5e3684cb1F318ec51b00Edba38d79Ac2c0aA9d", uma_qid)
+        assert naive != condition_id(NEG_RISK_ADAPTER, nr_qid)
+
+
+class TestBalanceOfBatchCodec:
+    def test_roundtrip(self):
+        owners = ["0x" + "a1" * 20, "0x" + "b0" * 20]
+        ids = [7, 2 ** 200]
+        data = encode_balance_of_batch(owners, ids)
+        assert data.startswith("0x4e1273f4")  # balanceOfBatch(address[],uint256[])
+        # a node would answer with the same-shaped uint256[]
+        encoded = "0x" + abi_encode(["uint256[]"], [[100, 250]]).hex()
+        assert decode_balance_of_batch(encoded, 2) == [100, 250]
+
+    def test_rejects_length_mismatch(self):
+        with pytest.raises(ValueError, match="length mismatch"):
+            encode_balance_of_batch(["0x" + "a1" * 20], [1, 2])
+
+    def test_rejects_short_response(self):
+        """A truncated response must fail loudly, not silently zero-fill positions."""
+        encoded = "0x" + abi_encode(["uint256[]"], [[1]]).hex()
+        with pytest.raises(ValueError, match="expected 2"):
+            decode_balance_of_batch(encoded, 2)

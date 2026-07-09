@@ -26,21 +26,34 @@ DEFAULT_ETH_RPCS = [
     "https://eth.blockscout.com/api/eth-rpc",
     "https://eth.drpc.org",
 ]
-# Ordered by verified ability to serve HISTORICAL receipts (2026-07-09). Several
-# otherwise-healthy public nodes answer eth_getTransactionReceipt with a null
-# result for old transactions instead of erroring -- see call_nonnull below.
+# Ordered by verified ability to serve HISTORICAL receipts and archive state, and
+# to accept wide eth_getLogs windows (2026-07-09). Two traps live here:
+#   * several otherwise-healthy public nodes answer eth_getTransactionReceipt with
+#     a null result for old transactions instead of erroring -- see call_nonnull.
+#   * drpc's free tier caps eth_getLogs at 10k blocks and reports it as HTTP 400
+#     with a JSON error body, so tenderly (which takes ~200k-block windows) leads.
 DEFAULT_POLYGON_RPCS = [
-    "https://polygon.drpc.org",
     "https://polygon.gateway.tenderly.co",
+    "https://polygon.drpc.org",
 ]
 
 _HEADERS = {"User-Agent": "traptrade/uma-backfill", "Content-Type": "application/json"}
 
 # Substrings providers use to say "your getLogs range/result set is too big".
+# Each provider phrases this differently and there is no error code convention;
+# a phrase missing from this list makes the scan abort instead of shrinking.
 _TOO_MUCH = (
     "more than", "too large", "too many", "query timeout", "exceed",
     "limit exceeded", "response size", "range is too large", "block range",
+    "are not supported",   # drpc: "ranges over 10000 blocks are not supported on freetier"
+    "freetier", "too big", "query returned more than", "log response size",
 )
+
+
+# Provider errors that mean "try again / try elsewhere" rather than "your request is
+# wrong". Treating these as fatal aborts a multi-thousand-call backfill on one blip.
+_TRANSIENT = ("request timeout", "rate limit", "too many requests", "capacity",
+              "temporarily unavailable", "server busy", "execution aborted")
 
 
 class RpcError(RuntimeError):
@@ -91,14 +104,27 @@ class JsonRpc:
                 )
                 if resp.status_code >= 500 or resp.status_code == 429:
                     raise requests.RequestException(f"HTTP {resp.status_code}")
+                # A provider may report a legitimate JSON-RPC error (notably "your
+                # getLogs range is too wide") with a 4xx status. Surfacing that as a
+                # transport failure would rotate endpoints forever instead of letting
+                # the caller shrink its window, so read the body before raising.
+                try:
+                    payload = resp.json()
+                except ValueError:
+                    payload = None
+                if payload and "error" in payload:
+                    err = str(payload["error"])
+                    # A transient provider error must rotate+retry, not abort. If every
+                    # attempt fails we still surface the original text, so get_logs_chunked
+                    # can decide to shrink its window.
+                    if any(s in err.lower() for s in _TRANSIENT):
+                        raise requests.RequestException(err)
+                    raise RpcError(err)
                 resp.raise_for_status()
-                payload = resp.json()
-                if "error" in payload:
-                    raise RpcError(str(payload["error"]))
                 return payload["result"]
             except RpcError:
                 raise
-            except (requests.RequestException, ValueError) as exc:
+            except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
                 last = exc
                 self._rotate()
                 time.sleep(0.8)
@@ -158,7 +184,11 @@ class JsonRpc:
                 logs = self.call("eth_getLogs", [params])
             except RpcError as exc:
                 msg = str(exc).lower()
-                if any(s in msg for s in _TOO_MUCH) and window > min_window:
+                # "all endpoints failed" usually means every provider timed out on a
+                # window this wide, which is the same signal as an explicit range
+                # error -- shrink rather than abort. Only give up at min_window.
+                too_much = any(s in msg for s in _TOO_MUCH) or "all endpoints failed" in msg
+                if too_much and window > min_window:
                     window = max(window // 2, min_window)
                     continue
                 raise

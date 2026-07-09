@@ -77,6 +77,21 @@ def main() -> None:
             print("   ", positions["status"].value_counts().to_string().replace("\n", "\n    "))
         return
 
+    # Coverage: what fraction of the linked disputes could we even look at?
+    n_linked = votes["dispute_tx_hash"].nunique()
+    covered = positions.loc[positions["status"].isin(["ok", "no_voter_position"]), "dispute_tx_hash"].nunique()
+    print(f"  disputes with votes                  {n_linked}")
+    print(f"  disputes with a resolved condition   {covered}  ({100 * covered / n_linked:.1f}% of sample)")
+    if "adapter" in ok:
+        mix = ok["adapter"].value_counts()
+        print(f"  positions by adapter                 " +
+              ", ".join(f"{k}={v}" for k, v in mix.items()))
+    dropped = positions[~positions["status"].isin(["ok", "no_voter_position"])]
+    if len(dropped):
+        print("  dropped (NOT counted as 'no conflict'):")
+        for status, n in dropped["status"].value_counts().items():
+            print(f"    {status}: {n}")
+
     # Annotate the FULL vote record, not just the disputes whose positions we could
     # rebuild. total_votes is a voter's whole DVM history (that's what the ">=3
     # historical votes" whale filter means); votes_with_position is only ever
@@ -93,28 +108,65 @@ def main() -> None:
         print("  VERDICT: NOT TESTABLE. Reporting N only, per the preregistration.")
         return
 
+    # ── The headline test ────────────────────────────────────────────────────
+    # conflict_rate's denominator counts every position-linked vote, including
+    # IGNORE. An IGNORE is a vote to reset, so it can never match a book, which
+    # structurally caps conflict_rate near (1 - IGNORE share) and makes it hard to
+    # read. The clean test restricts to DIRECTIONAL (YES/NO) position-linked votes
+    # and asks whether they land on the holder's own side more often than a coin.
+    linked = annotated[annotated["has_position"]]
+    directional = linked[linked["side"].isin(["YES", "NO"])]
+    own = int(directional["voted_with_own_position"].sum())
+    n_dir = len(directional)
+    print(f"\n  position-linked votes                {len(linked)}")
+    print(f"    of which directional (YES/NO)      {n_dir}")
+    print(f"    of which IGNORE (a vote to reset)  {int((linked['side'] == 'IGNORE').sum())}")
+
+    if n_dir:
+        rate = own / n_dir
+        print(f"\n  >> OWN-BOOK RATE on directional votes: {rate:.4f}  ({own}/{n_dir})")
+        print(f"     null if voters ignored their book:  0.5000")
+        try:
+            from scipy.stats import binomtest
+            p = binomtest(own, n_dir, 0.5, alternative="two-sided").pvalue
+            print(f"     binomial test vs 0.50:              p = {p:.3g}")
+        except ImportError:
+            pass
+
+    # Holders may also prefer to stall rather than vote against themselves.
+    ign_held = (linked["side"] == "IGNORE").mean()
+    ign_free = (annotated.loc[~annotated["has_position"], "side"] == "IGNORE").mean()
+    print(f"\n  IGNORE share | holds a position      {ign_held:.4f}")
+    print(f"  IGNORE share | holds nothing         {ign_free:.4f}")
+
+    # ── The preregistered metric, and why it must be read with care ──────────
     stats = compute_voter_stats(annotated)
+    print(f"\n  preregistered metric: share of eligible whales with conflict_rate > "
+          f"{CONFLICT_THRESHOLD}  (predicted 0.18 mine / <0.30 advisor)")
+    print("  sensitivity to the minimum number of POSITION-LINKED votes per whale:")
+    print("  (a whale with 1 linked vote scores 1.00 or 0.00 by construction)")
+    for min_linked in (1, 2, 3, 5):
+        eligible = [s for s in stats.values()
+                    if s.total_votes >= MIN_HISTORICAL_VOTES and s.votes_with_position >= min_linked]
+        if not eligible:
+            print(f"    min_linked>={min_linked}: 0 eligible")
+            continue
+        above = [s for s in eligible if s.conflict_rate > CONFLICT_THRESHOLD]
+        own_book = sum(s.voted_own_book for s in eligible)
+        with_pos = sum(s.votes_with_position for s in eligible)
+        print(f"    min_linked>={min_linked}: eligible={len(eligible):4d}  "
+              f"share>{CONFLICT_THRESHOLD}={len(above) / len(eligible):.3f} "
+              f"({len(above)}/{len(eligible)})  pooled_conflict_rate={own_book / with_pos:.4f}")
+
     eligible = [s for s in stats.values()
-                if s.total_votes >= MIN_HISTORICAL_VOTES and s.votes_with_position > 0]
-    print(f"\n  voters with >={MIN_HISTORICAL_VOTES} votes and >=1 linked position: {len(eligible)}")
-    if not eligible:
-        print("  VERDICT: NOT TESTABLE (no eligible whale).")
-        return
-
-    above = [s for s in eligible if s.conflict_rate > CONFLICT_THRESHOLD]
-    share = len(above) / len(eligible)
-    own_book = sum(s.voted_own_book for s in eligible)
-    with_pos = sum(s.votes_with_position for s in eligible)
-    print(f"  pooled conflict_rate (own-book votes / position-linked votes): "
-          f"{own_book / with_pos:.4f}  ({own_book}/{with_pos})")
-    print(f"  share of eligible whales with conflict_rate > {CONFLICT_THRESHOLD}: "
-          f"{share:.4f}  ({len(above)}/{len(eligible)})")
-    print(f"  predicted: 0.18 (mine) / <0.30 (advisor)")
-
-    print("\n  top conflicted whales by stake:")
-    for s in sorted(above, key=lambda s: -s.avg_stake)[:10]:
-        print(f"    {s.voter}  votes={s.total_votes:3d}  linked={s.votes_with_position:3d}  "
-              f"conflict_rate={s.conflict_rate:.2f}  avg_stake={s.avg_stake:,.0f} UMA")
+                if s.total_votes >= MIN_HISTORICAL_VOTES and s.votes_with_position >= 3]
+    above = sorted([s for s in eligible if s.conflict_rate > CONFLICT_THRESHOLD],
+                   key=lambda s: -s.avg_stake)
+    if above:
+        print("\n  whales above threshold with >=3 linked votes (the defensible ones):")
+        for s in above[:10]:
+            print(f"    {s.voter}  votes={s.total_votes:4d}  linked={s.votes_with_position:3d}  "
+                  f"conflict_rate={s.conflict_rate:.2f}  avg_stake={s.avg_stake:,.0f} UMA")
 
 
 if __name__ == "__main__":

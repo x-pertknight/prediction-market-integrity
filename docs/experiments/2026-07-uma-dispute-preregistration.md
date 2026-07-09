@@ -147,32 +147,48 @@ ruota endpoint sul null e solleva se tutti lo restituiscono.
 - Scoperta collaterale non prevista da nessuno: **67.4% reset**, non
   annullamenti (vedi correzione sopra).
 
-### conflict_rate whale — **ANCORA NON CALCOLABILE** (motivo cambiato)
-
-Il collo di bottiglia **non è più il join**, che ora funziona. È la
-ricostruzione delle posizioni storiche:
+### Posizioni storiche — risolte su entrambi i rami (2026-07-09)
 
 - Il voter DVM ha un EOA su mainnet; la posizione Polymarket sta in un Safe
-  proxy su Polygon. Il ponte è deterministico (CREATE2,
-  `salt = keccak(abi.encode(owner))`), risolto via `computeProxyAddress(owner)`
-  — verificato contro eventi `ProxyCreation` reali (2/2).
+  proxy su Polygon. Ponte deterministico (CREATE2,
+  `salt = keccak(abi.encode(owner))`), derivato **offline** — verificato contro
+  eventi `ProxyCreation` reali (2/2). Nota: l'evento è
+  `ProxyCreation(proxy, owner)`, ordine inverso rispetto a quanto suggeriscono
+  i nomi delle colonne su Dune.
 - `data-api.polymarket.com/positions` restituisce solo il **presente**: inutile
   per una disputa chiusa mesi fa. Non viene usata.
-- Il saldo al blocco della disputa va **rigiocato** dagli eventi ERC-1155
-  `TransferSingle`/`TransferBatch` del ConditionalTokens (un `balanceOf` a un
-  blocco storico richiederebbe un nodo archive, che gli RPC pubblici non danno).
-- **Limite reale e non aggirabile con questa derivazione:** il `positionId`
-  richiede il `conditionId`. Per l'adapter V2 (`0x6A9D...`) l'adapter è esso
-  stesso l'oracle CTF, quindi `conditionId = keccak(adapter, questionID, 2)`.
-  Ma l'adapter V3 (`0x2F5e...`) è deployato contro il **NegRiskOperator**
-  (verificato: constructor `_ctf = 0x71523d0f...` = NegRiskOperator), e le sue
-  condizioni sono preparate dal NegRiskAdapter sotto un questionId diverso.
-  **742/973 dispute vengono da V3.** Quelle vengono marcate
-  `negrisk_unsupported` invece di essere collegate a un positionId sbagliato.
+- Il saldo al blocco della disputa si legge con `balanceOfBatch` pinnato a quel
+  blocco. tenderly e drpc **servono stato archive** (verificato con un controllo
+  positivo: un nodo pruned risponde 0 a ogni query storica, indistinguibile da
+  "non deteneva nulla"). Il replay dai log ERC-1155 resta come fallback
+  (`--mode replay`).
 
-Quindi il conflict_rate è calcolabile oggi solo sul ramo V2 (231 dispute), e va
-riportato come tale. **Non riportare "nessuna conferma dell'ipotesi WSJ"**: è
-un "non ho ancora gli strumenti per misurarla su tutto il campione".
+**Il ramo negRisk è ora coperto.** L'adapter V3 (`0x2F5e...`) è deployato contro
+il `NegRiskOperator`, il cui `prepareCondition` è un **no-op esplicito**. La
+condizione vera la prepara il `NegRiskAdapter` sotto un questionId diverso. Il
+legame è on-chain:
+
+```
+requestId = questionID UMA = keccak(ancillaryData)
+NegRiskOperator.questionIds[requestId] -> negRisk questionId
+conditionId = keccak(NegRiskAdapter ‖ negRiskQuestionId ‖ 2)
+positionId  = NegRiskAdapter.getPositionId(qid, outcome)   // collateral = WrappedCollateral, NON USDC
+```
+
+Verificato su 3 dispute negRisk prima di applicarlo: `questionIds` non nullo
+3/3, conditionId locale == quello del contratto 3/3, `getOutcomeSlotCount == 2`
+3/3. Ogni condizione ha un controllo positivo `outcomeSlotCount == 2` prima
+dell'uso — una derivazione sbagliata restituisce un id ben formato che
+semplicemente non ha detentori. Dettagli: `docs/plans/negrisk-condition-mapping.md`.
+
+### conflict_rate
+
+Vedi `scripts/report_uma_conflict.py`. Il modulo usa l'**esposizione netta
+direzionale**: chi detiene YES e NO in pari misura ha un set completo che paga
+$1 comunque vada — è inventario coperto, non conflitto, e contarlo gonfierebbe
+il conflict_rate. Un voto IGNORE è un voto per il reset, mai un voto
+direzionale. Sotto le 20 dispute contese (soglia preregistrata) lo script
+**rifiuta** di stampare un tasso.
 
 ## Verdetto
 
@@ -180,8 +196,10 @@ un "non ho ancora gli strumenti per misurarla su tutto il campione".
   sotto entrambe, e con la scoperta del 67.4% di reset che nessuno aveva
   previsto (e che il documento precedente etichettava erroneamente come
   annullamenti).
-- **Ipotesi whale-conflict: PARZIALMENTE ABILITATA.** Il join dispute↔voto è
-  risolto (939/973, esatto anche sui round di reset). Resta da coprire il ramo
-  negRisk per il questionId → conditionId, senza il quale il conflict_rate è
-  misurabile solo su 231/973 dispute. Prossimo passo: mappare
-  `NegRiskOperator`/`NegRiskAdapter` questionId → conditionId.
+- **Join dispute↔voto: RISOLTO.** 939/973 dispute, esatto anche sui round di
+  reset. Controllo indipendente: il voto pluralità stake-weighted riproduce il
+  `settled_price` on-chain per 939/939 dispute (100%).
+- **Ipotesi whale-conflict: MISURABILE.** Entrambi i rami adapter coperti
+  (V2 + negRisk). Il numero finale e la sua copertura effettiva sono l'output di
+  `report_uma_conflict.py`; i limiti residui (proxy factory magic/email non
+  coperta, granularità a livello di blocco) sono elencati nel piano negRisk.

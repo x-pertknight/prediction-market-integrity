@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from eth_abi import decode as abi_decode
+from eth_abi import encode as abi_encode
 from eth_utils import keccak
 
 # Polygon deployments.
@@ -91,6 +92,30 @@ def balance_at(transfers: list[dict], holder: str, position_id: int, up_to_block
     return replay_balances(transfers, holder, up_to_block).get(position_id, 0)
 
 
+# ── ERC-1155 balanceOfBatch, pinned to a historical block ────────────────────
+# Preferred over the replay above when the endpoint serves archive state: one
+# eth_call per dispute instead of a multi-hour log scan. Verified on 2026-07-09
+# that polygon.gateway.tenderly.co and polygon.drpc.org both return real
+# historical balances (a pruned node would answer 0 for every query, so the
+# caller must positively confirm a nonzero known balance before trusting it).
+SEL_BALANCE_OF_BATCH = "0x" + keccak(text="balanceOfBatch(address[],uint256[])").hex()[:8]
+
+
+def encode_balance_of_batch(owners: list[str], ids: list[int]) -> str:
+    """Calldata for ConditionalTokens.balanceOfBatch."""
+    if len(owners) != len(ids):
+        raise ValueError(f"owners/ids length mismatch: {len(owners)} vs {len(ids)}")
+    return SEL_BALANCE_OF_BATCH + abi_encode(["address[]", "uint256[]"], [owners, ids]).hex()
+
+
+def decode_balance_of_batch(result: str, expected: int) -> list[int]:
+    raw = bytes.fromhex(result[2:] if result.startswith("0x") else result)
+    balances = list(abi_decode(["uint256[]"], raw)[0])
+    if len(balances) != expected:
+        raise ValueError(f"balanceOfBatch returned {len(balances)} values, expected {expected}")
+    return balances
+
+
 # ── Position identity ────────────────────────────────────────────────────────
 # conditionId = keccak256(abi.encodePacked(oracle, questionId, outcomeSlotCount))
 # is plain hashing, but collectionId is an alt_bn128 curve point derived on-chain,
@@ -103,6 +128,41 @@ def condition_id(oracle: str, question_id_hex: str, outcome_slot_count: int = 2)
     qid = question_id_hex[2:] if question_id_hex.startswith("0x") else question_id_hex
     packed = oracle_bytes + bytes.fromhex(qid) + outcome_slot_count.to_bytes(32, "big")
     return "0x" + keccak(packed).hex()
+
+
+# ── negRisk ──────────────────────────────────────────────────────────────────
+# Polymarket's multi-outcome (negRisk) markets do not prepare their CTF condition
+# under the UMA adapter. UmaCtfAdapter V3's `ctf` is the NegRiskOperator, whose
+# `prepareCondition` is an explicit no-op; the real condition is prepared by the
+# NegRiskAdapter under a DIFFERENT questionId. The two are linked on-chain by
+#     NegRiskOperator.questionIds[requestId] -> negRisk questionId
+# where `requestId` is the UMA adapter's own questionID (= keccak(ancillaryData)),
+# as evidenced by the oracle calling `reportPayouts(_requestId, payouts)`.
+#
+# Then, per NegRiskAdapter.getConditionId / getPositionId:
+#     conditionId = keccak(NegRiskAdapter ‖ negRiskQuestionId ‖ 2)
+#     positionId  = getPositionId(wcol, getCollectionId(0, conditionId, indexSet))
+# Note the collateral is the adapter's WrappedCollateral, NOT USDC. Deriving a
+# negRisk positionId against USDC yields a well-formed id that simply never has a
+# holder, so every voter would silently read as holding nothing.
+NEG_RISK_OPERATOR = "0x71523d0f655B41E805Cec45b17163f528B59B820"
+NEG_RISK_ADAPTER = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+
+SEL_NEGRISK_QUESTION_IDS = "0x" + keccak(text="questionIds(bytes32)").hex()[:8]
+SEL_NEGRISK_POSITION_ID = "0x" + keccak(text="getPositionId(bytes32,bool)").hex()[:8]
+SEL_OUTCOME_SLOT_COUNT = "0x" + keccak(text="getOutcomeSlotCount(bytes32)").hex()[:8]
+
+
+def negrisk_market_id(negrisk_question_id_hex: str) -> str:
+    """The negRisk marketId a question belongs to: the questionId with its last byte zeroed."""
+    qid = negrisk_question_id_hex[2:] if negrisk_question_id_hex.startswith("0x") else negrisk_question_id_hex
+    return "0x" + (int(qid, 16) & ~0xFF).to_bytes(32, "big").hex()
+
+
+def negrisk_question_index(negrisk_question_id_hex: str) -> int:
+    """The question's index within its negRisk market (the questionId's last byte)."""
+    qid = negrisk_question_id_hex[2:] if negrisk_question_id_hex.startswith("0x") else negrisk_question_id_hex
+    return int(qid, 16) & 0xFF
 
 
 def position_side(index_set: int) -> str:
