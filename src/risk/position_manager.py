@@ -23,6 +23,7 @@ class RiskState:
     consecutive_losses: int   = 0
     halted:             bool  = False
     halt_reason:        str   = ""
+    halt_scope:         str   = ""    # "daily" clears at day rollover; "sticky" never auto-resets
     open_positions:     dict  = field(default_factory=dict)   # market_id → {size, price}
     category_exposure:  dict  = field(default_factory=dict)   # category → total_size
 
@@ -61,13 +62,20 @@ class PositionManager:
         if self.state.daily_start != today:
             self.state.daily_start = today
             self.state.daily_pnl   = 0.0
-            # Reset halt if it was a daily drawdown halt
-            if "daily drawdown" in self.state.halt_reason:
-                self.state.halted     = False
+            # Only daily-scoped halts (daily drawdown, daily loss cap) clear
+            # at the day rollover; sticky halts (consecutive losses, manual,
+            # equity) never auto-reset. Scope is an explicit field, not text.
+            if self.state.halted and self.state.halt_scope == "daily":
+                self.state.halted      = False
                 self.state.halt_reason = ""
+                self.state.halt_scope  = ""
             save_state(self.state)
 
     def can_trade(self) -> tuple[bool, str]:
+        # Roll the day over even in a long-running process. The reset is no
+        # longer confined to __init__, so a daily halt clears when the date
+        # changes mid-run instead of persisting across midnight until restart.
+        self._reset_daily_if_needed()
         if self.state.halted:
             return False, self.state.halt_reason
         # Daily drawdown check (percentage)
@@ -75,12 +83,14 @@ class PositionManager:
         if self.state.daily_pnl <= -max_loss:
             self.state.halted     = True
             self.state.halt_reason = "daily drawdown limit hit"
+            self.state.halt_scope  = "daily"
             save_state(self.state)
             return False, self.state.halt_reason
         # Daily loss dollar cap
         if self.state.daily_pnl <= -MAX_DAILY_LOSS_DOLLARS:
             self.state.halted     = True
             self.state.halt_reason = f"daily loss cap ${MAX_DAILY_LOSS_DOLLARS}"
+            self.state.halt_scope  = "daily"
             save_state(self.state)
             return False, self.state.halt_reason
         # Max open positions
@@ -90,6 +100,7 @@ class PositionManager:
         if self.state.consecutive_losses >= MAX_CONSEC_LOSSES:
             self.state.halted     = True
             self.state.halt_reason = f"consecutive losses: {self.state.consecutive_losses}"
+            self.state.halt_scope  = "sticky"
             save_state(self.state)
             return False, self.state.halt_reason
         return True, "ok"

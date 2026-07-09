@@ -356,6 +356,24 @@ def _log_trade(row: dict) -> None:
     df.to_csv(TRADES_CSV, mode="a", header=header, index=False)
 
 
+def _seed_cumulative_pnl(csv_path: Path = TRADES_CSV) -> float:
+    """Lifetime realized PnL from closed trades already logged in the CSV.
+
+    The trades CSV is appended across process restarts, so seeding the
+    in-memory counter from it keeps cumulative_pnl continuous instead of
+    restarting at 0 every launch. Open rows have an empty pnl_net and are
+    skipped. See docs/reports/2026-07-08-diagnosi.md (Diagnosi 3)."""
+    if not csv_path.exists():
+        return 0.0
+    try:
+        df = pd.read_csv(csv_path)
+    except pd.errors.EmptyDataError:
+        return 0.0
+    if "pnl_net" not in df.columns:
+        return 0.0
+    return float(pd.to_numeric(df["pnl_net"], errors="coerce").sum())
+
+
 # ── Open positions ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -378,7 +396,9 @@ class PaperPosition:
 class PaperTrader:
     def __init__(self):
         self.positions: dict[str, PaperPosition] = {}
-        self.cumulative_pnl = 0.0
+        # Seed from the CSV so the running total continues across restarts
+        # instead of resetting to 0 every launch (Diagnosi 3, 2026-07-08).
+        self.cumulative_pnl = _seed_cumulative_pnl()
         self.bankroll = INITIAL_BANKROLL
         self.model = self._load_model()
         self.macro = _load_macro()
