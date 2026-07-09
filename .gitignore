@@ -18,6 +18,8 @@ data/raw/*.csv
 data/raw/*.parquet
 data/processed/*.parquet
 data/processed/*.csv
+# UMA DVM votes: 276 MB as CSV, 5 MB as parquet — commit the parquet only
+data/uma_votes.csv
 
 # Models (binary — track metadata only)
 models/*.joblib
