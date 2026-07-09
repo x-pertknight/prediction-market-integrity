@@ -1,124 +1,31 @@
 # TrapTrade
 
-Quantitative prediction market trading system for Kalshi and Polymarket. Uses Random Forest models with lookahead-free features, Taleb risk framework, and mechanical circuit breakers.
+Research infrastructure for **prediction-market integrity, oracle risk, and microstructure** — across Polymarket, Kalshi, and UMA. Everything runs in paper (`LIVE_MODE=False`); the value here is the method and the on-chain investigation, not a live edge.
 
-## Architecture
+> **Start with [`POSTMORTEM.md`](./POSTMORTEM.md)** — the honest record: five hypotheses tested under preregistered gates, five killed, zero capital lost, eight self-deceptions caught before they shipped.
 
-```
-src/
-├── features_clean.py        # Lookahead-free feature engineering (27 features)
-├── model_clean.py           # RF model training (general + weather)
-├── backtest_clean.py        # Walk-forward backtest with fees + impact
-├── run_backtest_signal_only.py  # Cache-only backtest runner
-│
-├── risk/
-│   ├── fees.py              # Kalshi parabolic + Polymarket conditional fees
-│   ├── market_impact.py     # Almgren-Chriss impact model, liquidity tiers
-│   ├── circuit_breaker.py   # 5 mechanical halt rules
-│   ├── taleb.py             # Jensen convexity, Hill estimator, ergodicity
-│   ├── kelly.py             # Kelly criterion sizing
-│   └── position_manager.py  # Portfolio position tracking
-│
-├── execution/
-│   ├── paper_trader.py      # Live paper trading via Polymarket Gamma API
-│   ├── kalshi_executor.py   # Kalshi order execution (RSA-PSS auth)
-│   └── polymarket_executor.py  # Polymarket CLOB execution
-│
-├── models/
-│   ├── block_bootstrap.py   # Series-grouped bootstrap CI
-│   ├── hmm_regime.py        # Hidden Markov Model regime detection
-│   ├── calibration.py       # Probability calibration
-│   └── cross_market.py      # Cross-market correlation
-│
-├── alerts/
-│   └── telegram_bot.py      # Telegram commands + auto-alerts
-│
-├── data/                    # Data fetchers (FRED, NewsAPI, Coinalyze, etc.)
-├── whale/                   # Whale tracker + smart money index
-└── alpha/                   # Alpha strategies (arb, OBI, favorite-longshot)
-```
+## Showcase — UMA dispute / whale-conflict investigation
 
-## Performance (Walk-Forward Backtest)
+An oracle-integrity question on Polymarket's UMA resolution layer: *do whales who hold a position vote their own book?* Reconstructed end-to-end from **public RPC alone — zero paid data providers**.
 
-| Metric | Value |
-|--------|-------|
-| Sharpe (gross) | 5.34 |
-| Sharpe (net, after fees + impact) | 5.05 |
-| Total P&L (gross) | $11,882 |
-| Total fees (Kalshi parabolic) | $340 |
-| Total market impact | $16 |
-| Trades | 100,168 |
-| Win rate | 19% |
-| Edge multiplier | 0.70 (enter when price <= model_prob * 0.70) |
+- Linked **939/973** on-chain disputes to their DVM votes. The join validates independently: the stake-weighted vote reproduces the on-chain settled price **939/939** — a misjoin cannot do that.
+- Reconstructed each voter's **historical** Polymarket position *at the dispute block*: Safe proxies derived offline via CREATE2, CTF balances replayed from ERC-1155 transfers, negRisk `questionId → conditionId` mapped to **100% coverage**.
+- Finding: positioned voters **do** vote their own book — **63.2%** vs 50% random (p=1.5×10⁻⁵). But their stake is negligible against the total DVM, so it **cannot move the outcome**: corr(tilt, outcome) = −0.02, Fisher p = 1.00. **Documentable conflict, not a predictive edge** — and a mildly reassuring result for oracle integrity.
 
-## Setup
+Full method, every number, and the eight self-deceptions caught → [`POSTMORTEM.md`](./POSTMORTEM.md). Predictions written *before* each run → [`docs/experiments/`](./docs/experiments).
 
-```bash
-# Clone and create venv
-git clone <repo-url> && cd traptrade
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+## What's inside
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys:
-#   KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PATH
-#   POLY_API_KEY, POLY_SECRET, POLY_PASSPHRASE, POLY_PRIVATE_KEY
-#   TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
-```
+- **UMA on-chain pipeline** — `src/alpha/uma_dispute.py`, `src/alpha/uma_whale_edge.py`, `scripts/fetch_votes_web3.py`, `scripts/fetch_positions_web3.py`, `src/data/` (public-RPC client, DVM logs, CTF positions, cross-chain bridge decoding).
+- **Cross-platform rules matcher** — `src/alpha/cross_platform_arb.py`: two-stage Polymarket↔Kalshi matcher (fuzzy candidates → structured rule diff → `EXACT` / `DIVERGENT` / `UNKNOWN`), real fees. First live scan: 0 EXACT of 2,500 — it refuses to fabricate arbs the way naive text-similarity would.
+- **negRisk scanner** — `src/alpha/negrisk_scanner.py`: read-only set-price exhaustiveness scanner (ref. arXiv 2508.03474).
+- **Risk engine** — `src/risk/`: Kalshi parabolic + Polymarket schedule fee models, mechanical circuit breakers, position manager, Taleb/Hill fat-tail tooling.
+- **Tests** — 430 passing (14 skipped).
 
-## Paper Trading
+## Method
 
-```bash
-# Start paper trader (polls Polymarket Gamma API every 60s)
-python src/execution/paper_trader.py
-
-# Or with Docker
-docker compose up paper-trader
-```
-
-The paper trader:
-1. Polls active markets from Polymarket Gamma API
-2. Scores each market with the RF model
-3. Enters when `price <= model_prob * 0.70` (30% edge minimum)
-4. Exits when `price >= model_prob * 0.90` or expiry <= 24h
-5. Checks circuit breaker before every trade
-6. Logs trades to `data/paper_trades.csv`
-7. Sends Telegram alerts for entries, exits, whale clusters
-
-## Live Trading
-
-```bash
-# Kalshi (requires RSA key pair)
-LIVE_MODE=true python src/execution/kalshi_executor.py
-
-# Polymarket (requires Polygon wallet)
-LIVE_MODE=true python src/execution/polymarket_executor.py
-```
-
-**LIVE_MODE is False by default.** All orders are dry-run logged unless explicitly enabled.
-
-## Running Backtest
-
-```bash
-# Full walk-forward backtest with Kalshi fees
-python src/run_backtest_signal_only.py
-
-# Run tests
-pytest tests/ -v --cov=src
-```
-
-## Fee Models
-
-- **Kalshi**: Parabolic taker fee = `0.07 * P * (1-P)`. Max 1.75c at P=0.50. Settlement is free.
-- **Polymarket**: Most markets FREE. Crypto/NCAAB/sports: `P*(1-P)*0.02`.
-
-## Risk Framework
-
-- **Circuit Breaker**: 5 mechanical rules — rolling Sharpe(30) < 0.5, daily DD > 5%, 3 consecutive losses, weekly Sharpe < 1.0 (reduce 50%), monthly Sharpe < 0.5 (halt).
-- **Market Impact**: Almgren-Chriss model. Liquidity tiers: ILLIQUID (<$100/day, skip), HIGH ($100-500, quarter-Kelly), MODERATE ($500-5K, half-Kelly), LOW (>$5K, full).
-- **Taleb Framework**: Jensen convexity scoring, Hill fat-tail detection, Peters-Gell-Mann ergodicity check, 1/sqrt(N) diversification.
+Preregister the prediction before running. Gate on both temporal halves. Kill a strategy the moment it fails a gate — never re-tune to a pass. Pull on-chain data from public RPC and read it defensively (null-RPC rotation, archive-node control balances, keys verified against source contracts). **The negative results are the deliverable.**
 
 ## Disclaimer
 
-This software is for educational and research purposes. Trading prediction markets involves significant risk of loss. Past backtest performance does not guarantee future results. The authors are not responsible for any financial losses. Always paper trade before going live.
+Research and educational use. Paper-only by design; no tradable edge is claimed — the opposite is documented. Nothing here is financial advice.
