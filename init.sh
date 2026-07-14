@@ -10,7 +10,7 @@ echo "  TrapTrade — Init Script"
 echo "=============================="
 
 # ── 1. ENV VARS ──────────────────────────────────────────────────────────────
-export NOAA_TOKEN="REDACTED_NOAA_TOKEN"
+: "${NOAA_TOKEN:?NOAA_TOKEN not set. Copy .env.example to .env, fill in NOAA_TOKEN, then run: set -a; source .env; set +a}"
 export NOAA_BASE_URL="https://www.ncdc.noaa.gov/cdo-web/api/v2"
 export POLYMARKET_GAMMA_URL="https://gamma-api.polymarket.com"
 
