@@ -10,7 +10,7 @@ An oracle-integrity question on Polymarket's UMA resolution layer: *do whales wh
 
 - Linked **939/973** on-chain disputes to their DVM votes. The join validates independently: the stake-weighted vote reproduces the on-chain settled price **939/939** — a misjoin cannot do that.
 - Reconstructed each voter's **historical** Polymarket position *at the dispute block*: Safe proxies derived offline via CREATE2, CTF balances replayed from ERC-1155 transfers, negRisk `questionId → conditionId` mapped to **100% coverage**.
-- Finding: positioned voters **do** vote their own book — **63.2%** vs 50% random (p=1.5×10⁻⁵). But their stake is negligible against the total DVM, so it **cannot move the outcome**: corr(tilt, outcome) = −0.02, Fisher p = 1.00. **Documentable conflict, not a predictive edge** — and a mildly reassuring result for oracle integrity.
+- Finding: positioned voters **do** vote their own book — **63.2%** vs 50% random (p=1.5×10⁻⁵). But positioned voters held at most 1.30% of final-round DVM stake (median ≈0%). Counterfactual flip test: reassigning every positioned voter's stake to their own book across all 939 disputes changes zero outcomes (0/939) — documentable conflict, structurally incapable of moving settlement. (The flip test reassigns observed voters' stake only; it does not model positioned holders who don't vote, or deliberate stake accumulation.) corr(tilt, outcome) = −0.02, Fisher p = 1.00. **Documentable conflict, not a predictive edge** — and a mildly reassuring result for oracle integrity.
 
 Full method, every number, and the eight self-deceptions caught → [`POSTMORTEM.md`](./POSTMORTEM.md). Predictions written *before* each run → [`docs/experiments/`](./docs/experiments).
 
