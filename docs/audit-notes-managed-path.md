@@ -25,6 +25,6 @@ Implications applied to the article:
 Open items:
 1. Round-by-round reconstruction of the 1,889 managed-path disputes (votes, outcomes,
    overturn decomposition) analogous to the classic 973
-2. Identify requester 0x69c47de9d4d3dad79590d61b9e05918e03775f24
+2. CLOSED (review round 4): 0x69c47de9... is Polygonscan-labeled "Polymarket: Neg Risk UMA CTF Adapter V4", the negRisk sibling of the managed adapter
 3. How managed-path disputes reach the DVM vote (both 2026 cases were decided by UMA
    token voters per WSJ) and whether receipts land on the same voting contract
