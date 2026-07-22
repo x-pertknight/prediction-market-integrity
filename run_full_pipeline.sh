@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 source .venv/bin/activate
-export NOAA_TOKEN="REDACTED_NOAA_TOKEN"
+: "${NOAA_TOKEN:?NOAA_TOKEN not set. Copy .env.example to .env, fill in NOAA_TOKEN, then run: set -a; source .env; set +a}"
 export PYTHONPATH="$ROOT/src"
 
 LOG_DIR="$ROOT/logs"
