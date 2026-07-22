@@ -84,11 +84,19 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
+from logging.handlers import RotatingFileHandler
+
+# Rotating file log: max ~200 MB per file, keep 4 backups (≈1 GB cap total).
+# Prevents the unbounded-log disk-fill incident. When launched detached,
+# redirect stdout to /dev/null (see scripts/) so no unbounded *_stdout.log forms.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(LOG_DIR / "polymarket_trader.log"),
+        RotatingFileHandler(
+            LOG_DIR / "polymarket_trader.log",
+            maxBytes=200 * 1024 * 1024, backupCount=4,
+        ),
         logging.StreamHandler(sys.stdout),
     ],
 )

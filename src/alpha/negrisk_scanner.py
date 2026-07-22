@@ -48,6 +48,24 @@ GAMMA_BASE = "https://gamma-api.polymarket.com"
 CSV_PATH = Path("data/negrisk_log.csv")
 WHITELIST_PATH = Path("data/negrisk_whitelist.json")
 
+# ── Logging (rotating, bounded — replaces raw stdout printing) ──────────────────
+# Runs under launchd; previously every scan printed to stdout, which the plist
+# captured into an unbounded logs/negrisk_scanner.log. Output now goes to a
+# rotating logs/negrisk.log (~200 MB x 4). The launchd stdout file stays empty.
+import logging
+from logging.handlers import RotatingFileHandler
+
+_LOG_DIR = Path("logs")
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+log = logging.getLogger("negrisk_scanner")
+if not log.handlers:
+    log.setLevel(logging.INFO)
+    _h = RotatingFileHandler(_LOG_DIR / "negrisk.log",
+                             maxBytes=200 * 1024 * 1024, backupCount=4)
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    log.addHandler(_h)
+    log.propagate = False
+
 MIN_LEGS = 3          # below this, binary/degenerate — not a multi-outcome set
 DEFAULT_THRESHOLD = 0.02  # 2c net margin per $1 set, per the verified paper bound
 
@@ -97,7 +115,7 @@ def fetch_negrisk_events(max_events: int = 300) -> list[dict]:
             offset += len(batch)
             time.sleep(0.2)
         except Exception as e:
-            print(f"  [NegRisk] fetch error: {e}")
+            log.info(f"  [NegRisk] fetch error: {e}")
             break
     return events
 
@@ -298,11 +316,11 @@ def maybe_send_daily_digest(csv_path: Path = CSV_PATH,
         from alerts.telegram_bot import _send
         sent = _send(text)
     except Exception as e:
-        print(f"  [NegRisk] digest send failed: {e}")
+        log.info(f"  [NegRisk] digest send failed: {e}")
         return False
     if sent:
         state_path.write_text(json.dumps({"last_sent": today}))
-        print(f"  [NegRisk] daily digest sent ({today})")
+        log.info(f"  [NegRisk] daily digest sent ({today})")
     return bool(sent)
 
 
@@ -343,7 +361,7 @@ def scan_once(threshold: float = DEFAULT_THRESHOLD,
             r = analyze_event(e, whitelist, threshold)
         except Exception as ex:
             # one malformed event must never kill the collection loop
-            print(f"  [NegRisk] skipping event {e.get('id', '?')}: {ex}")
+            log.info(f"  [NegRisk] skipping event {e.get('id', '?')}: {ex}")
             continue
         if r:
             rows.append(r)
@@ -357,25 +375,25 @@ def scan_once(threshold: float = DEFAULT_THRESHOLD,
             paper_cycle(rows, events_by_id, live_legs, _leg_fee,
                         fetch_orderbook, fetch_event)
         except Exception as e:
-            print(f"  [NegRisk] paper cycle error: {e}")
+            log.info(f"  [NegRisk] paper cycle error: {e}")
         try:
             maybe_send_daily_digest()
         except Exception as e:
-            print(f"  [NegRisk] digest error: {e}")
+            log.info(f"  [NegRisk] digest error: {e}")
 
     triggered = [r for r in rows if r["tradable_long"] or r["tradable_short"]]
-    print(f"[NegRisk] {len(events)} negRisk events | {len(rows)} analyzed | "
+    log.info(f"[NegRisk] {len(events)} negRisk events | {len(rows)} analyzed | "
           f"{len(triggered)} above {threshold:.2%} net")
     for r in sorted(triggered, key=lambda x: -max(x["margin_long_net"],
                                                   x["margin_short_net"])):
         side = "LONG" if r["tradable_long"] else "SHORT"
         margin = r["margin_long_net"] if r["tradable_long"] else r["margin_short_net"]
-        print(f"  {side} {margin:+.4f} net | {r['n_legs']} legs | "
+        log.info(f"  {side} {margin:+.4f} net | {r['n_legs']} legs | "
               f"{r['exhaustive_reason']:9s} | {r['title'][:60]}")
     # Near-misses blocked only by the exhaustiveness gate — whitelist candidates
     for r in rows:
         if not r["exhaustive"] and r["margin_long_net"] >= threshold:
-            print(f"  GATED {r['margin_long_net']:+.4f} net | {r['n_legs']} legs | "
+            log.info(f"  GATED {r['margin_long_net']:+.4f} net | {r['n_legs']} legs | "
                   f"NOT exhaustive — review for whitelist | {r['title'][:60]}")
     return triggered
 
@@ -397,7 +415,7 @@ def main() -> None:
                 scan_once(args.threshold, args.max_events, paper=args.paper)
             except Exception as e:
                 # keep the launchd service alive; next cycle retries
-                print(f"  [NegRisk] scan failed, retrying next cycle: {e}")
+                log.info(f"  [NegRisk] scan failed, retrying next cycle: {e}")
             time.sleep(args.loop)
     else:
         scan_once(args.threshold, args.max_events, paper=args.paper)
