@@ -1,4 +1,4 @@
-# TrapTrade
+# Prediction market integrity research
 
 Research infrastructure for **prediction-market integrity, oracle risk, and microstructure** — across Polymarket, Kalshi, and UMA. Everything runs in paper (`LIVE_MODE=False`); the value here is the method and the on-chain investigation, not a live edge.
 
