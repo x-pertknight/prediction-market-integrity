@@ -1,6 +1,6 @@
 # The Missing Greek: what settlement risk actually costs on prediction markets
 
-*Marco Amendola, July 2026. On-chain numbers reconstructed from public Polygon RPC; method, coverage audit and artifacts: github.com/x-pertknight/traptrade. A note on the title: strictly speaking what this piece computes is a valuation adjustment, a settlement CVA, not a sensitivity. "Greek" is shorthand for a risk axis that belongs in the quote and today is not there.*
+*Marco Amendola, July 2026. On-chain numbers reconstructed from public Polygon RPC; method, coverage audit and artifacts: github.com/x-pertknight/prediction-market-integrity. A note on the title: strictly speaking what this piece computes is a valuation adjustment, a settlement CVA, not a sensitivity. "Greek" is shorthand for a risk axis that belongs in the quote and today is not there.*
 
 Binary options have delta, theta and vega. On-chain binary options carry a fourth risk that nobody quotes: the chance that the settlement mechanism itself reprices your position after the event is over. This piece measures it, and the measurement kills the number everyone quotes.
 
@@ -67,4 +67,4 @@ The adapter migration is not a footnote, it is the direction of travel. Polymark
 
 The classic-book regime split is confirmed at the questionID level for disputes (every reconstructed dispute traces to the classic adapters), but the 1.48% extrapolates a 5-month clean window. The too-early join covers 648 of 656 disputes; the 8 pending could nudge the 14.0% by a few tenths. The loss-given-flip assumes terminal value zero, an upper bound. The wallet-level conflict measurement misses proxy and off-chain exposure, and says nothing about prospective stake acquisition. The oracle-coverage audit samples June-July 2026; the non-UMA share was smaller in earlier months, and the split over time is an open audit item. The managed book's 1,889 disputes are counted, not reconstructed: no overturn, flip, or latency figure in this piece applies to that book. Kalshi's side of the comparison is qualitative by necessity, which is itself the point. And S is a valuation adjustment with stated assumptions, not a trading signal.
 
-Method, coverage audit, the prereg with its wrong guesses left in, and every number: github.com/x-pertknight/traptrade
+Method, coverage audit, the prereg with its wrong guesses left in, and every number: github.com/x-pertknight/prediction-market-integrity

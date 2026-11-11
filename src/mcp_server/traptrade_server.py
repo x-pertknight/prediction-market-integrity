@@ -1,12 +1,12 @@
 """
-src/mcp/traptrade_server.py — MCP server for TrapTrade.
+src/mcp_server/traptrade_server.py — MCP server for TrapTrade.
 
-Exposes TrapTrade capabilities as tools that any AI agent can call.
+Exposes TrapTrade capabilities as tools that any MCP client can call.
 Uses FastMCP for the server framework.
 
 Usage:
-  python src/mcp/traptrade_server.py              # stdio (MCP client)
-  python src/mcp/traptrade_server.py --transport sse --port 8100  # HTTP/SSE
+  python src/mcp_server/traptrade_server.py              # stdio (MCP client)
+  python src/mcp_server/traptrade_server.py --transport sse --port 8100  # HTTP/SSE
 
 Tools:
   get_market_probability  — Score a market with the RF model

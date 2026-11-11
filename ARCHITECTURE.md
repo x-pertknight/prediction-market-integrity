@@ -8,7 +8,7 @@ Trained on Kalshi historical data, paper trading on Polymarket via Gamma API.
 ```bash
 source .venv/bin/activate
 python src/execution/paper_trader.py     # paper trading (Polymarket)
-pytest tests/ -v                         # tests (119 pass)
+pytest tests/ -v                         # tests
 python src/data/fetch_all.py             # refresh macro data
 ```
 

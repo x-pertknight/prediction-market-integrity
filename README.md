@@ -20,7 +20,7 @@ Full method, every number, and the eight self-deceptions caught → [`POSTMORTEM
 - **Cross-platform rules matcher** — `src/alpha/cross_platform_arb.py`: two-stage Polymarket↔Kalshi matcher (fuzzy candidates → structured rule diff → `EXACT` / `DIVERGENT` / `UNKNOWN`), real fees. First live scan: 0 EXACT of 2,500 — it refuses to fabricate arbs the way naive text-similarity would.
 - **negRisk scanner** — `src/alpha/negrisk_scanner.py`: read-only set-price exhaustiveness scanner (ref. arXiv 2508.03474).
 - **Risk engine** — `src/risk/`: Kalshi parabolic + Polymarket schedule fee models, mechanical circuit breakers, position manager, Taleb/Hill fat-tail tooling.
-- **Tests** — 430 passing (14 skipped).
+- **Tests** — 439 passing (14 skipped).
 
 ## Method
 
