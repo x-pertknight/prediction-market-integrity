@@ -13,7 +13,7 @@ import pandas as pd
 from datetime import date, timedelta
 from pathlib import Path
 
-NOAA_TOKEN = os.environ.get("NOAA_TOKEN", "REDACTED_NOAA_TOKEN")
+NOAA_TOKEN = os.environ.get("NOAA_TOKEN", "")  # set NOAA_TOKEN in .env, see .env.example
 NOAA_BASE  = "https://www.ncdc.noaa.gov/cdo-web/api/v2"
 HDR        = {"token": NOAA_TOKEN}
 
