@@ -163,9 +163,10 @@ def main() -> None:
     above = sorted([s for s in eligible if s.conflict_rate > CONFLICT_THRESHOLD],
                    key=lambda s: -s.avg_stake)
     if above:
-        print("\n  whales above threshold with >=3 linked votes (the defensible ones):")
-        for s in above[:10]:
-            print(f"    {s.voter}  votes={s.total_votes:4d}  linked={s.votes_with_position:3d}  "
+        print("\n  whales above threshold with >=3 linked votes (the defensible ones),"
+              " addresses not shown, findings are reported in aggregate:")
+        for rank, s in enumerate(above[:10], 1):
+            print(f"    voter #{rank:<2d}  votes={s.total_votes:4d}  linked={s.votes_with_position:3d}  "
                   f"conflict_rate={s.conflict_rate:.2f}  avg_stake={s.avg_stake:,.0f} UMA")
 
 

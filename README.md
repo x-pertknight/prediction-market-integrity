@@ -14,6 +14,16 @@ An oracle-integrity question on Polymarket's UMA resolution layer: *do whales wh
 
 Full method, every number, and the eight self-deceptions caught → [`POSTMORTEM.md`](./POSTMORTEM.md). Predictions written *before* each run → [`docs/experiments/`](./docs/experiments).
 
+## The Missing Greek: settlement risk on Polymarket and UMA
+
+How much does the settlement mechanism itself cost a holder, after the event is over? Reconstructed from public Polygon RPC on the classic resolution adapters.
+
+- Conditional on a dispute, the final outcome differs from the original proposal 14.0 percent of the time (136 of 973).
+- The repricing component of the settlement adjustment is about 8.5 bps of notional on the current regime (0.61 percent dispute rate) and about 21 bps on the pre-migration regime (1.48 percent). The delay component is about 0.07 bps.
+- An earlier draft led with "the disputer wins 74.7 percent of the time" and put the cost at 105 to 110 bps by treating every DVM overturn as a terminal loss. Both were retracted. The preregistered guess was 1 to 5 bps.
+
+Article: [`articles/settlement-risk-article.md`](./articles/settlement-risk-article.md). Preregistration: [`docs/settlement-premium-prereg.md`](./docs/settlement-premium-prereg.md).
+
 ## What's inside
 
 - **UMA on-chain pipeline** — `src/alpha/uma_dispute.py`, `src/alpha/uma_whale_edge.py`, `scripts/fetch_votes_web3.py`, `scripts/fetch_positions_web3.py`, `src/data/` (public-RPC client, DVM logs, CTF positions, cross-chain bridge decoding).

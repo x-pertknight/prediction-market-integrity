@@ -1,106 +1,83 @@
-# TrapTrade — Architecture & Development Notes
+# Architecture
 
 ## Overview
-Polymarket/Kalshi prediction market bot. RF model + Taleb risk framework.
-Trained on Kalshi historical data, paper trading on Polymarket via Gamma API.
 
-## Quick Start
+Research infrastructure for Polymarket, Kalshi and UMA. It started as a prediction market model (random forest plus a fat-tail risk framework, trained on Kalshi history and run in paper on Polymarket) and became the tooling for the integrity studies in the README. Everything runs in paper, `LIVE_MODE=False`. The strategies that were tested and killed are recorded in POSTMORTEM.md.
+
+## Quick start
+
 ```bash
 source .venv/bin/activate
+PYTHONPATH=src pytest tests/ -q          # test suite
+python -I scripts/flip_test_uma.py       # UMA counterfactual flip test, offline
 python src/execution/paper_trader.py     # paper trading (Polymarket)
-pytest tests/ -v                         # tests
 python src/data/fetch_all.py             # refresh macro data
 ```
 
-## Architecture
+## Layout
+
 ```
 src/
-  data/          — API fetchers + polymarket_feature_adapter.py
-  models/        — RF training, HMM regime, calibration, retrain
-  risk/          — fees.py, market_impact.py, circuit_breaker.py (Taleb framework)
-  execution/     — paper_trader.py, kalshi_executor.py, polymarket_executor.py
-  alerts/        — Telegram bot (alerts bot)
-  alpha/         — favorite-longshot, cross-platform arb, OBI, wash filter
-  whale/         — whale tracker, SMI, conviction scoring
-data/
-  raw/           — API CSVs, OHLCV cache (market_history/)
-  processed/     — wf_clean_general.parquet, feature matrices
-models/          — rf_clean_general.joblib (trained RF, 20 features)
-tests/           — pytest, 119 tests
-keys/            — RSA keys (NEVER commit)
+  data/          API fetchers, public RPC client, DVM logs, CTF positions, polymarket_feature_adapter.py
+  models/        RF training, HMM regime, calibration, retrain
+  risk/          fees.py, market_impact.py, circuit_breaker.py, fat-tail tooling
+  execution/     paper_trader.py, kalshi_executor.py, polymarket_executor.py
+  alerts/        Telegram alerts
+  alpha/         UMA dispute and whale-edge tests, favorite-longshot, cross-platform rules matcher, negRisk scanner, OBI, wash filter
+  whale/         whale tracker, SMI, conviction scoring
+  mcp_server/    MCP server exposing the model and scans as tools
+scripts/         UMA fetch, backfill, flip test and report scripts
+data/            committed UMA dispute, vote and position datasets
+docs/            preregistrations, audits, method notes
+articles/        The Missing Greek, settlement risk on Polymarket and UMA
+tests/           pytest suite
 ```
 
-## Key Files
-- `.env` — API keys (NEVER commit, NEVER print contents)
-- `src/data/polymarket_feature_adapter.py` — maps Gamma API → RF features
-- `src/features_clean.py` — CLEAN_FEATURES definition (28 total, 20 used by model)
-- `src/model_clean.py` — walk-forward RF/XGB/LR ensemble training
-- `data/processed/wf_clean_general.parquet` — 499K rows, WF predictions
+`.env` and `keys/` hold API credentials and are never committed.
 
-## Feature Pipeline
+## Feature pipeline
+
 ```
-features_generic.py → features_clean.py → model_clean.py → backtest_clean.py
-                                                          → paper_trader.py (live)
+features_generic.py -> features_clean.py -> model_clean.py -> backtest_clean.py
+                                                           -> paper_trader.py
 ```
 
-## Model Details
-- RF trained on 20 features (8 constant features excluded by nunique>1 filter)
-- Training data: Kalshi bulk historical (2021-2026)
-- Entry: price <= model_prob * 0.70 (30% edge requirement)
-- Exit: price >= model_prob * 0.90 OR expiry <= 24h
+## Model details
 
-## Polymarket Adapter (CRITICAL)
-Gamma API has NO tags/category fields. The adapter:
-- Infers category via regex on slug/question text
-- Uses training-set medians for unmappable features (hist_win_rate_series=0.0149)
-- Computes days_in_market from startDate, volume_rank cross-sectionally
+- RF on 20 features (8 constant features excluded by a nunique > 1 filter).
+- Training data: Kalshi bulk history, 2021 to 2026.
+- Entry when price <= model_prob * 0.70 (30 percent edge requirement).
+- Exit when price >= model_prob * 0.90 or expiry is within 24h.
 
-## Circuit Breaker
-- 15% peak equity drawdown → HALT
-- 8% daily drawdown → reduce 50%
-- Rolling Sharpe window = 100 trades
-- Drawdown-based ONLY, no loss-count triggers
+## Polymarket adapter
 
-## NegRisk Set Arbitrage (2026-07-07 — see docs/handoff-2026-07-07.md)
-- `src/alpha/negrisk_scanner.py` — margini sum-of-prices su eventi multi-outcome,
-  gira sotto launchd `com.traptrade.negrisk-scanner` con `--paper`
-- `src/alpha/negrisk_paper.py` — executor simulato, realizza a risoluzione
-- Whitelist esaustività: `data/negrisk_whitelist.json` + protocollo in
-  `docs/negrisk-whitelist-dossier.md`. Long gated, short libero.
-- Evidenze: `data/negrisk_log.csv`, `data/negrisk_paper_trades.csv`
-- Fee Polymarket: per categoria (solo geopolitics gratis) — usare
-  `polymarket_fee_from_schedule()` quando c'è il market dict
+The Gamma API has no tags or category fields. The adapter infers the category by regex on the slug and question text, uses training-set medians for features it cannot map (hist_win_rate_series = 0.0149), computes days_in_market from startDate and ranks volume cross-sectionally.
 
-## Session Protocol
-1. Read this file + `docs/handoff-2026-07-07.md` + `git log --oneline -10`
-2. Check: `ps aux | grep -E "paper_trader|polymarket_trader|negrisk"`
-3. Run `pytest tests/ -v` after every code change
-4. Commit with descriptive message after every completed task
+## Circuit breaker
 
-## Rules
-- NEVER print or log API keys, private keys, or .env contents
-- NEVER commit keys/ or .env
-- NEVER override LIVE_MODE without explicit user approval
-- All fees: Kalshi parabolic formula or Polymarket conditional — no flat estimates
-- Sharpe: check Hill alpha first — if alpha < 2, use gain-to-pain ratio
-- Circuit breaker: ONLY drawdown, not loss count
+- 15 percent peak equity drawdown halts trading.
+- 8 percent daily drawdown halves size.
+- Rolling Sharpe window of 100 trades.
+- Drawdown triggers only, no loss-count triggers.
 
-## MCP Server
-```bash
-python src/mcp_server/traptrade_server.py                           # stdio (MCP client)
-python src/mcp_server/traptrade_server.py --transport sse --port 8100  # HTTP/SSE
-```
-Tools: `get_market_probability`, `get_portfolio_status`, `get_market_scan`, `get_backtest_summary`
+## negRisk set arbitrage
 
-## Known Limitations
-- hist_win_rate_series uses training median (0.0149) — no Polymarket series history
-- Macro CSVs need daily refresh via fetch_all.py
-- Model trained on Kalshi, applied to Polymarket — domain shift expected
-- Entertainment Sharpe 10.73 likely non-tradable (low liquidity)
-- Edge decay: -2.84 Sharpe/quarter — validate fast
+- `src/alpha/negrisk_scanner.py` sums prices across multi-outcome events and nets fees per leg, in paper mode.
+- `src/alpha/negrisk_paper.py` simulates buying the set at the CLOB touch and realizes it at resolution from the actual outcomes.
+- Exhaustiveness whitelist in `data/negrisk_whitelist.json`, protocol in `docs/negrisk-whitelist-dossier.md`. Long side gated, short side free.
+- Polymarket fees are charged per category (only geopolitics is free). Use `polymarket_fee_from_schedule()` when the market dict is available.
 
-## Do NOT
-- Add features without running permutation importance test
-- Change entry threshold without re-running backtest
-- Deploy to live without 7 days paper trading data
-- Use Sharpe as primary metric if Hill alpha < 2
+## Method rules
+
+- All fees use the Kalshi parabolic formula or the Polymarket schedule, never flat estimates.
+- Check the Hill tail index before reporting Sharpe. If alpha < 2, report gain-to-pain instead.
+- No new feature without a permutation importance test.
+- No entry threshold change without rerunning the backtest.
+
+## Known limitations
+
+- hist_win_rate_series uses the training median (0.0149), since Polymarket has no series history.
+- Macro CSVs need a daily refresh via fetch_all.py.
+- The model is trained on Kalshi and applied to Polymarket, so domain shift is expected.
+- The entertainment Sharpe of 10.73 is likely not tradable (low liquidity).
+- Edge decay measured at -2.84 Sharpe per quarter.

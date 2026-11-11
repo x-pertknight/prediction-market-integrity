@@ -2,7 +2,7 @@
 
 The trades CSV is appended across restarts; the in-memory counter must be
 seeded from it so a restart continues the lifetime total instead of resetting
-to zero (see docs/reports/2026-07-08-diagnosi.md, Diagnosi 3).
+to zero.
 """
 import sys
 from pathlib import Path

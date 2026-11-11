@@ -371,7 +371,7 @@ def _seed_cumulative_pnl(csv_path: Path = TRADES_CSV) -> float:
     The trades CSV is appended across process restarts, so seeding the
     in-memory counter from it keeps cumulative_pnl continuous instead of
     restarting at 0 every launch. Open rows have an empty pnl_net and are
-    skipped. See docs/reports/2026-07-08-diagnosi.md (Diagnosi 3)."""
+    skipped."""
     if not csv_path.exists():
         return 0.0
     try:
