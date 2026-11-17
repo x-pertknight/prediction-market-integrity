@@ -24,6 +24,16 @@ How much does the settlement mechanism itself cost a holder, after the event is 
 
 Article: [`articles/settlement-risk-article.md`](./articles/settlement-risk-article.md). Preregistration: [`docs/settlement-premium-prereg.md`](./docs/settlement-premium-prereg.md).
 
+## Limitless: how recurring crypto markets resolve
+
+Every settled BTC and ETH up/down market on Limitless (Base), 5 minute markets over 7 days and 15 minute markets over 14 days, 6,719 markets with all trades from the public API.
+
+- All are mirrored from Polymarket: Chainlink TWAP price, outcome taken from Polymarket's settlement. Median resolution 91.1 s after close; 58 markets (0.9%) resolved on a second attempt at about 180 s.
+- 4.4% to 6.6% of markets close within 1 bp of the price to beat.
+- No detectable late edge, in a test with little power.
+
+Write-up, code, data and both demolition passes: [`limitless-resolution/`](./limitless-resolution).
+
 ## What's inside
 
 - **UMA on-chain pipeline** — `src/alpha/uma_dispute.py`, `src/alpha/uma_whale_edge.py`, `scripts/fetch_votes_web3.py`, `scripts/fetch_positions_web3.py`, `src/data/` (public-RPC client, DVM logs, CTF positions, cross-chain bridge decoding).
