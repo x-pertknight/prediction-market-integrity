@@ -1,0 +1,47 @@
+{
+  "note": "computed from the raw tables before aggregation, not recomputable from the shipped data",
+  "disputes_with_resolved_condition": 939,
+  "positions_by_adapter": {
+    "negrisk": 364,
+    "v2": 268
+  },
+  "dropped_status": {},
+  "distinct_dvm_voters": 4371,
+  "exact_flip_test": {
+    "disputes_reproduced": 939,
+    "gate_failures": 0,
+    "outcomes_changed": 0,
+    "positioned_stake_share": {
+      "median": 0.0,
+      "mean": 6.213530595549854e-05,
+      "p95": 0.0001893389039896704,
+      "max": 0.01296709685440458
+    }
+  },
+  "conflict_rate_sensitivity": [
+    {
+      "min_linked": 1,
+      "eligible": 210,
+      "above_0_8": 37,
+      "pooled_conflict_rate": 0.25908372827804105
+    },
+    {
+      "min_linked": 2,
+      "eligible": 140,
+      "above_0_8": 19,
+      "pooled_conflict_rate": 0.25932504440497334
+    },
+    {
+      "min_linked": 3,
+      "eligible": 71,
+      "above_0_8": 3,
+      "pooled_conflict_rate": 0.2635294117647059
+    },
+    {
+      "min_linked": 5,
+      "eligible": 28,
+      "above_0_8": 1,
+      "pooled_conflict_rate": 0.30714285714285716
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+# Raw fetch outputs name wallets: they stay local. Publish via scripts/build_tables.py
+data/raw/
+.env
+__pycache__/
+*.py[cod]
+.venv/
+venv/

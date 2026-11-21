@@ -1,0 +1,11 @@
+# Offline recompute (scripts/reproduce.py)
+numpy==2.5.5
+pandas==3.1.1
+pyarrow==26.0.1
+scipy==1.18.1
+# Fetch scripts only (public RPC, plus the dispute list query)
+requests==2.34.2
+eth-utils==6.0.0
+eth-abi==6.0.0
+pycryptodome==4.5.0
+python-dotenv==1.2.4
