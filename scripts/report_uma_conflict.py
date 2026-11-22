@@ -14,8 +14,9 @@ Figures that need voter level rows (distinct voters, coverage of the position
 rebuild, the per voter conflict_rate metric) come from data/summary_raw.json,
 computed by scripts/build_tables.py from the raw tables, and are labelled.
 
-The predictions quoted below were recorded before the run; that file is not
-included in this repo.
+The predictions quoted below were written down and are scored here, misses
+included. The predictions file is not in this repo and no hash was recorded,
+so their date cannot be checked from the repo.
 
     python3 -I scripts/report_uma_conflict.py
 """
@@ -32,8 +33,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from uma_dvm import summarize_disputes, vote_side  # noqa: E402
 
 DATA = Path(__file__).resolve().parent.parent / "data"
-MIN_CONTESTED_DISPUTES = 20   # testability floor set before the run
-CONFLICT_THRESHOLD = 0.8      # threshold set before the run (predicted share: 0.18)
+MIN_CONTESTED_DISPUTES = 20   # testability floor from the written predictions
+CONFLICT_THRESHOLD = 0.8      # threshold from the written predictions (predicted share: 0.18)
 RAW_LABEL = "(raw tables, not recomputable from shipped data)"
 
 
@@ -48,7 +49,7 @@ def print_breakdown() -> None:
         print(f"  {label:34s} {n:5d}  {100 * n / b.n_disputes:5.1f}%")
     print(f"\n  decided (RESET excluded)            {b.n_decided:5d}")
     print(f"  DVM confirmed the proposer          {b.n_confirmed:5d}")
-    print(f"\n  BASE RATE  = {b.base_rate:.4f}   (prediction recorded before the run: 0.85)")
+    print(f"\n  BASE RATE  = {b.base_rate:.4f}   (written prediction: 0.85)")
     print(f"  RESET RATE = {b.reset_rate:.4f}   a dispute buys delay, not a reversal")
 
 

@@ -32,8 +32,8 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
 DUNE_API_BASE = "https://api.dune.com/api/v1"
-# The id of the saved Dune query is not published here. It is kept in a
-# private archive. Set DUNE_DISPUTES_QUERY_ID to the id of your own query.
+# The id of the saved Dune query is not published here. Set
+# DUNE_DISPUTES_QUERY_ID to the id of your own query (see the docstring).
 DISPUTES_QUERY_ID = os.environ.get("DUNE_DISPUTES_QUERY_ID")
 DISPUTES_CSV = ROOT / "data" / "raw" / "uma_disputes.csv"
 

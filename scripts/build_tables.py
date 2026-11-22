@@ -179,7 +179,7 @@ def publish_own_book(annotated: pd.DataFrame) -> None:
     shuffled(out).to_csv(OUT / "own_book_votes.csv", index=False)
 
 
-def prereg_sensitivity(annotated: pd.DataFrame) -> list[dict]:
+def conflict_rate_sensitivity(annotated: pd.DataFrame) -> list[dict]:
     """Share of eligible voters with conflict_rate > 0.8, by minimum linked votes."""
     stats = compute_voter_stats(annotated)
     rows = []
@@ -221,7 +221,7 @@ def main() -> None:
     summary = {"note": "computed from the raw tables before aggregation, "
                        "not recomputable from the shipped data",
                **coverage(v, p), "exact_flip_test": flip,
-               "conflict_rate_sensitivity": prereg_sensitivity(annotated)}
+               "conflict_rate_sensitivity": conflict_rate_sensitivity(annotated)}
     (OUT / "summary_raw.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"wrote published tables to {OUT}")
 

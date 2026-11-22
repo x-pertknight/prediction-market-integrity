@@ -6,7 +6,11 @@ Two studies of how Polymarket settles disputed markets through UMA, rebuilt from
 python3 -I scripts/reproduce.py
 ```
 
-Install the pinned packages first with `pip install -r requirements.txt`.
+The command needs the packages in `requirements.txt`; on a stock python3 without pandas it stops with `ModuleNotFoundError`. Install them first:
+
+```
+python3 -m pip install -r requirements.txt
+```
 
 ## 1. The Missing Greek: settlement risk on the classic UMA book
 
