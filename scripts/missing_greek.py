@@ -50,7 +50,7 @@ def dvm_decomposition(disputes: pd.DataFrame) -> dict:
     print(f"  DVM confirmed the proposal             {cls['confirmed']}")
     lat = disputes["latency_days"]
     print(f"  dispute to DVM settle, days            median {lat.median():.2f}, p95 {np.percentile(lat, 95):.1f}, max {lat.max():.1f}")
-    return {"n": n, "too_early": int(cls["too_early"]), "flip": int(cls["flip"])}
+    return {"n": n, "too_early": int(cls["too_early"]), "flip": int(cls["flip"]), "overturned": int(overturned)}
 
 
 def too_early_join(n_too_early: int) -> dict:
@@ -87,11 +87,13 @@ def regime_rates() -> dict:
     for key, label, w in windows:
         d, r = int(w["dvm"].sum()), int(w["v23_resolved"].sum())
         out[key] = d / r
+        out[f"{key}_disputes"], out[f"{key}_resolutions"] = d, r
         print(f"  {label}   {d:4d} / {r:7,} = {d / r:.2%}")
     return out
 
 
-def main() -> None:
+def main() -> dict:
+    """Print the figures and return them for the README check in reproduce.py."""
     disputes = pd.read_csv(DATA / "uma_disputes.csv", dtype={"settled_price": str, "proposedPrice": str})
     dvm = dvm_decomposition(disputes)
     te = too_early_join(dvm["too_early"])
@@ -104,6 +106,11 @@ def main() -> None:
     print("\nREPRICING COMPONENT OF THE SETTLEMENT ADJUSTMENT (dispute rate x P(change))")
     print(f"  current regime   {rates['post'] * p_change * 1e4:.1f} bps of notional")
     print(f"  pre migration    {rates['pre'] * p_change * 1e4:.1f} bps of notional")
+    return {"n": dvm["n"], "changed": changed, "p_change": p_change, "overturned": dvm["overturned"],
+            "p_overturned": dvm["overturned"] / dvm["n"], "too_early": dvm["too_early"],
+            "bps_post": rates["post"] * p_change * 1e4, "bps_pre": rates["pre"] * p_change * 1e4,
+            **{f"{k}_{c}": rates[f"{k}_{c}"] for k in ("pre", "post") for c in ("disputes", "resolutions")},
+            "rate_pre": rates["pre"], "rate_post": rates["post"]}
 
 
 if __name__ == "__main__":

@@ -81,7 +81,7 @@ def print_coverage(raw: dict, own: pd.DataFrame) -> int:
     return contested
 
 
-def print_own_book(own: pd.DataFrame, sides: pd.Series) -> None:
+def print_own_book(own: pd.DataFrame, sides: pd.Series) -> dict:
     """Directional (YES/NO) votes only: an IGNORE vote can never match a book."""
     directional = own[own["vote_side"].isin(["YES", "NO"])]
     n_dir = len(directional)
@@ -102,6 +102,7 @@ def print_own_book(own: pd.DataFrame, sides: pd.Series) -> None:
     free_ign = (sides.get("IGNORE", 0) - n_ign) / (sides.sum() - len(own))
     print(f"\n  IGNORE share | holds a position      {n_ign / len(own):.4f}")
     print(f"  IGNORE share | holds nothing         {free_ign:.4f}")
+    return {"own_book": n_own, "directional": n_dir, "p_own_book": n_own / n_dir}
 
 
 def print_sensitivity(raw: dict) -> None:
@@ -114,7 +115,8 @@ def print_sensitivity(raw: dict) -> None:
               f"({r['above_0_8']}/{r['eligible']})  pooled_conflict_rate={r['pooled_conflict_rate']:.4f}")
 
 
-def main() -> None:
+def main() -> dict:
+    """Print the report and return the own book figures (empty if not testable)."""
     tally = pd.read_csv(DATA / "dvm_round_tally.csv", dtype={"price": str})
     own = pd.read_csv(DATA / "own_book_votes.csv")
     raw = json.loads((DATA / "summary_raw.json").read_text())
@@ -126,9 +128,10 @@ def main() -> None:
     contested = print_coverage(raw, own)
     if contested < MIN_CONTESTED_DISPUTES:
         print(f"\n  N = {contested} < {MIN_CONTESTED_DISPUTES}: NOT TESTABLE, reporting N only.")
-        return
-    print_own_book(own, sides)
+        return {}
+    figures = print_own_book(own, sides)
     print_sensitivity(raw)
+    return figures
 
 
 if __name__ == "__main__":
