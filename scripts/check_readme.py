@@ -15,7 +15,7 @@ README = Path(__file__).resolve().parent.parent / "README.md"
 NUM = r"([\d,]+(?:\.\d+)?)"
 
 # (README pattern with one group per figure, computed keys in group order).
-# Keys ending in "p_", "rate_" or "stake_" are shares and are compared as percent.
+# Keys starting with "p_", "rate_" or "stake_", and margin_min, are shares compared as percent.
 PATTERNS = [
     (rf"differs from the original proposal {NUM}% of the time \({NUM} of {NUM}\)",
      ["p_change", "changed", "n"]),
@@ -28,6 +28,11 @@ PATTERNS = [
     (rf"voted their own book {NUM}% of the time \({NUM} of {NUM}\)", ["p_own_book", "own_book", "directional"]),
     (rf"at most {NUM}% of the final round stake", ["stake_max"]),
     (rf"smallest winning margin in any final round is {NUM}% of the stake", ["margin_min"]),
+    (rf"reproduces the settled price on {NUM} of {NUM}", ["reproduced", "linked"]),
+    (rf"more than twice the published {NUM}% bound on positioned stake", ["stake_bound"]),
+    # "no reassignment ... changes any of the 939 outcomes": all 939 stay as settled
+    (rf"changes any of the {NUM} outcomes", ["outcomes_unchanged"]),
+    (rf"The exact voter level replay, run on the raw tables, also gives {NUM} of {NUM}", ["raw_changed", "raw_reproduced"]),
 ]
 
 

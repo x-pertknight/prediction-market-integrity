@@ -74,7 +74,10 @@ def main() -> dict:
     verdict = ("positioned voters vote their book, but their stake cannot move outcomes."
                if len(can_flip) == 0 else f"{len(can_flip)} outcome(s) not excluded by the bound.")
     print("  VERDICT:", verdict)
-    return {"margin_min": float(ok["margin"].min()), "stake_max": s["max"]}
+    return {"margin_min": float(ok["margin"].min()), "stake_max": s["max"],
+            "reproduced": len(ok), "linked": len(fr), "outcomes_unchanged": len(ok) - len(can_flip),
+            "stake_bound": float(ok["positioned_share_max"].max()),
+            "raw_changed": raw["outcomes_changed"], "raw_reproduced": raw["disputes_reproduced"]}
 
 
 if __name__ == "__main__":
