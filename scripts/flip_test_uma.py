@@ -41,7 +41,7 @@ def final_round_shares(tally: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("dispute")
 
 
-def main() -> None:
+def main() -> dict:
     tally = pd.read_csv(DATA / "dvm_round_tally.csv", dtype={"price": str})
     disputes = pd.read_csv(DATA / "dvm_disputes.csv", dtype={"settled_price": str}).set_index("dispute")
     raw = json.loads((DATA / "summary_raw.json").read_text())["exact_flip_test"]
@@ -74,6 +74,7 @@ def main() -> None:
     verdict = ("positioned voters vote their book, but their stake cannot move outcomes."
                if len(can_flip) == 0 else f"{len(can_flip)} outcome(s) not excluded by the bound.")
     print("  VERDICT:", verdict)
+    return {"margin_min": float(ok["margin"].min()), "stake_max": s["max"]}
 
 
 if __name__ == "__main__":
